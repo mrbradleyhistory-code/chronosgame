@@ -39,6 +39,9 @@ export function CivManager() {
   const [newUsername, setNewUsername] = useState('')
   const [newColor, setNewColor] = useState('#6366f1')
   const [addingCiv, setAddingCiv] = useState(false)
+  const [settingStatus, setSettingStatus] = useState(false)
+
+  const selectedGame = games.find((g) => g.id === selectedGameId) ?? null
 
   useEffect(() => {
     if (user) loadGames()
@@ -94,6 +97,19 @@ export function CivManager() {
     setShowNewGame(false)
   }
 
+  async function handleSetStatus(status: string) {
+    setSettingStatus(true)
+    const { error } = await supabase
+      .from('games')
+      .update({ status })
+      .eq('id', selectedGameId)
+    setSettingStatus(false)
+    if (error) { alert(error.message); return }
+    setGames((prev) =>
+      prev.map((g) => (g.id === selectedGameId ? { ...g, status } : g))
+    )
+  }
+
   async function handleAddCiv(e: React.FormEvent) {
     e.preventDefault()
     setAddingCiv(true)
@@ -136,6 +152,40 @@ export function CivManager() {
           + Game
         </button>
       </div>
+
+      {/* ── game status bar ── */}
+      {selectedGame && (
+        <div className="flex items-center gap-2 mb-4">
+          <span className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${
+            selectedGame.status === 'active'  ? 'bg-green-900/50 text-green-300 border border-green-700' :
+            selectedGame.status === 'ended'   ? 'bg-slate-700 text-slate-400 border border-slate-600' :
+            selectedGame.status === 'review'  ? 'bg-blue-900/50 text-blue-300 border border-blue-700' :
+                                                'bg-amber-900/50 text-amber-300 border border-amber-700'
+          }`}>
+            {selectedGame.status}
+          </span>
+
+          {selectedGame.status === 'lobby' && (
+            <button
+              onClick={() => handleSetStatus('active')}
+              disabled={settingStatus}
+              className="rounded bg-green-700 px-3 py-1 text-xs font-semibold hover:bg-green-600 disabled:opacity-50 transition-colors"
+            >
+              {settingStatus ? 'Activating…' : '▶ Activate Game'}
+            </button>
+          )}
+
+          {selectedGame.status === 'active' && (
+            <button
+              onClick={() => handleSetStatus('ended')}
+              disabled={settingStatus}
+              className="rounded bg-red-900/60 border border-red-700 px-3 py-1 text-xs font-semibold text-red-300 hover:bg-red-800/60 disabled:opacity-50 transition-colors"
+            >
+              {settingStatus ? 'Ending…' : '■ End Game'}
+            </button>
+          )}
+        </div>
+      )}
 
       {/* ── new game form ── */}
       {showNewGame && (
