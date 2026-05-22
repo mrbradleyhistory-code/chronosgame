@@ -1,6 +1,11 @@
 -- Run this any time to install or reinstall the PIN management functions.
 -- Safe to re-run — uses CREATE OR REPLACE and IF NOT EXISTS.
 
+-- Add 'paused' to the games status constraint (safe to re-run)
+alter table public.games drop constraint if exists games_status_check;
+alter table public.games add constraint games_status_check
+  check (status in ('lobby', 'active', 'paused', 'review', 'ended'));
+
 create extension if not exists pgcrypto;
 
 -- verify_student_pin: called by unauthenticated students

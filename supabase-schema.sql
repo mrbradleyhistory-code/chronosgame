@@ -15,7 +15,7 @@ create table public.games (
   class_name   text not null,
   teacher_id   uuid not null references auth.users(id) on delete cascade,
   current_turn integer not null default 1,
-  status       text not null default 'lobby' check (status in ('lobby','active','review','ended')),
+  status       text not null default 'lobby' check (status in ('lobby','active','paused','review','ended')),
   world_seed   text,
   settings     jsonb not null default '{}',
   created_at   timestamptz not null default now()

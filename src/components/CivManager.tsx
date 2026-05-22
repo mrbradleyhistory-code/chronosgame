@@ -155,33 +155,64 @@ export function CivManager() {
 
       {/* ── game status bar ── */}
       {selectedGame && (
-        <div className="flex items-center gap-2 mb-4">
+        <div className="flex items-center gap-2 mb-4 flex-wrap">
           <span className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${
             selectedGame.status === 'active'  ? 'bg-green-900/50 text-green-300 border border-green-700' :
-            selectedGame.status === 'ended'   ? 'bg-slate-700 text-slate-400 border border-slate-600' :
+            selectedGame.status === 'paused'  ? 'bg-slate-700 text-slate-300 border border-slate-500' :
+            selectedGame.status === 'ended'   ? 'bg-slate-800 text-slate-500 border border-slate-700' :
             selectedGame.status === 'review'  ? 'bg-blue-900/50 text-blue-300 border border-blue-700' :
                                                 'bg-amber-900/50 text-amber-300 border border-amber-700'
           }`}>
-            {selectedGame.status}
+            {selectedGame.status === 'paused' ? '⏸ paused' :
+             selectedGame.status === 'active' ? '● active' :
+             selectedGame.status}
           </span>
 
+          {/* lobby: first-ever start */}
           {selectedGame.status === 'lobby' && (
             <button
               onClick={() => handleSetStatus('active')}
               disabled={settingStatus}
               className="rounded bg-green-700 px-3 py-1 text-xs font-semibold hover:bg-green-600 disabled:opacity-50 transition-colors"
             >
-              {settingStatus ? 'Activating…' : '▶ Activate Game'}
+              {settingStatus ? 'Starting…' : '▶ Start Game'}
             </button>
           )}
 
+          {/* active: end today's session (pauses, not permanent) */}
           {selectedGame.status === 'active' && (
             <button
-              onClick={() => handleSetStatus('ended')}
+              onClick={() => handleSetStatus('paused')}
               disabled={settingStatus}
-              className="rounded bg-red-900/60 border border-red-700 px-3 py-1 text-xs font-semibold text-red-300 hover:bg-red-800/60 disabled:opacity-50 transition-colors"
+              className="rounded bg-slate-600 border border-slate-500 px-3 py-1 text-xs font-semibold hover:bg-slate-500 disabled:opacity-50 transition-colors"
             >
-              {settingStatus ? 'Ending…' : '■ End Game'}
+              {settingStatus ? 'Pausing…' : '⏸ End Session'}
+            </button>
+          )}
+
+          {/* paused: resume next class day */}
+          {selectedGame.status === 'paused' && (
+            <button
+              onClick={() => handleSetStatus('active')}
+              disabled={settingStatus}
+              className="rounded bg-green-700 px-3 py-1 text-xs font-semibold hover:bg-green-600 disabled:opacity-50 transition-colors"
+            >
+              {settingStatus ? 'Resuming…' : '▶ Resume Session'}
+            </button>
+          )}
+
+          {/* active or paused: end permanently (end of semester) */}
+          {(selectedGame.status === 'active' || selectedGame.status === 'paused') && (
+            <button
+              onClick={() => {
+                if (confirm('End this game permanently? Students will no longer be able to log in.')) {
+                  handleSetStatus('ended')
+                }
+              }}
+              disabled={settingStatus}
+              className="rounded bg-red-900/40 border border-red-800 px-3 py-1 text-xs font-semibold text-red-400 hover:bg-red-900/60 disabled:opacity-50 transition-colors"
+            >
+              End Game Permanently
             </button>
           )}
         </div>
