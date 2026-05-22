@@ -1,4 +1,4 @@
-import type { HexCell, HexMapData, TerrainType } from './hexUtils'
+import type { HexCell, HexMapData, TerrainType, ResourceType } from './hexUtils'
 
 // ─── local seed / resource helpers (mirrors mapGen internals) ─────────────────
 
@@ -73,7 +73,7 @@ function toHexMap(g: Grid, cols: number, rows: number, seed: string): HexMapData
   for (let r = 0; r < rows; r++)
     for (let q = 0; q < cols; q++) {
       const terrain = CODES[g[r]?.[q] ?? '.'] ?? 'coast'
-      cells.push({ q, r, terrain, resource: placeResource(terrain, q, r, s) as TerrainType | null, owner: null, explored_by: [] })
+      cells.push({ q, r, terrain, resource: placeResource(terrain, q, r, s) as ResourceType, owner: null, explored_by: [] })
     }
   return { cols, rows, cells }
 }
