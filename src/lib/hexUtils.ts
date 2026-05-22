@@ -2,8 +2,13 @@ export const HEX_SIZE = 36
 export const MAP_COLS = 30
 export const MAP_ROWS = 20
 
-export type TerrainType = 'plains' | 'forest' | 'hills' | 'desert' | 'coast' | 'river'
-export type ResourceType = 'wheat' | 'wood' | 'stone' | 'iron' | 'gold' | 'gems' | 'fish' | null
+export type TerrainType =
+  | 'plains' | 'forest' | 'hills' | 'desert' | 'coast' | 'river'
+  | 'mountain' | 'lake' | 'jungle' | 'steppe' | 'tundra'
+
+export type ResourceType =
+  | 'wheat' | 'wood' | 'stone' | 'iron' | 'gold' | 'gems' | 'fish'
+  | null
 
 export interface HexCell {
   q: number
@@ -14,24 +19,38 @@ export interface HexCell {
   explored_by: string[]
 }
 
-export type HexMap = HexCell[]
-
-export const TERRAIN_COLORS: Record<TerrainType, string> = {
-  plains: '#7CB05A',
-  forest: '#2D6A2D',
-  hills:  '#9E7A4A',
-  desert: '#C8A84B',
-  coast:  '#5B9EC9',
-  river:  '#4478B8',
+export interface HexMapData {
+  cols: number
+  rows: number
+  cells: HexCell[]
 }
 
-export const TERRAIN_DARK: Record<TerrainType, string> = {
-  plains: '#4A6B35',
-  forest: '#1A3D1A',
-  hills:  '#5E4828',
-  desert: '#7A6429',
-  coast:  '#2A5E7A',
-  river:  '#1E3F6E',
+export const TERRAIN_COLORS: Record<TerrainType, string> = {
+  plains:   '#7CB05A',
+  forest:   '#2D6A2D',
+  hills:    '#9E7A4A',
+  desert:   '#C8A84B',
+  coast:    '#5B9EC9',
+  river:    '#4478B8',
+  mountain: '#8C8C9A',
+  lake:     '#3A7FC8',
+  jungle:   '#1A5218',
+  steppe:   '#B5A055',
+  tundra:   '#A8BFCC',
+}
+
+export const TERRAIN_LABELS: Record<TerrainType, string> = {
+  plains:   'Plains',
+  forest:   'Forest',
+  hills:    'Hills',
+  desert:   'Desert',
+  coast:    'Coast',
+  river:    'River',
+  mountain: 'Mountain',
+  lake:     'Lake',
+  jungle:   'Jungle',
+  steppe:   'Steppe',
+  tundra:   'Tundra',
 }
 
 export const RESOURCE_COLORS: Record<string, string> = {
@@ -64,6 +83,22 @@ export const RESOURCE_NAMES: Record<string, string> = {
   fish:  'Fish',
 }
 
+export const MAP_SIZE_OPTIONS = [
+  { label: 'Tiny (20×13)',    cols: 20, rows: 13, civHint: '2–4 civs'  },
+  { label: 'Small (25×17)',   cols: 25, rows: 17, civHint: '4–6 civs'  },
+  { label: 'Standard (30×20)', cols: 30, rows: 20, civHint: '6–10 civs' },
+  { label: 'Large (36×24)',   cols: 36, rows: 24, civHint: '10–16 civs' },
+  { label: 'Huge (42×28)',    cols: 42, rows: 28, civHint: '16+ civs'  },
+] as const
+
+export function suggestMapSize(civCount: number) {
+  if (civCount <= 4)  return MAP_SIZE_OPTIONS[0]
+  if (civCount <= 6)  return MAP_SIZE_OPTIONS[1]
+  if (civCount <= 10) return MAP_SIZE_OPTIONS[2]
+  if (civCount <= 16) return MAP_SIZE_OPTIONS[3]
+  return MAP_SIZE_OPTIONS[4]
+}
+
 const SQRT3 = Math.sqrt(3)
 
 // Pointy-top hexagons, odd-r offset layout
@@ -75,18 +110,14 @@ export function hexToPixel(q: number, r: number, size = HEX_SIZE) {
 }
 
 export function pixelToHex(px: number, py: number, size = HEX_SIZE): { q: number; r: number } {
-  // Pixel → axial fractional (pointy-top)
   const fax = (SQRT3 / 3 * px - py / 3) / size
   const far = (2 / 3 * py) / size
-  // Cube fractional
   const fcx = fax, fcy = -fax - far, fcz = far
-  // Cube round
   let rx = Math.round(fcx), ry = Math.round(fcy), rz = Math.round(fcz)
   const dx = Math.abs(rx - fcx), dy = Math.abs(ry - fcy), dz = Math.abs(rz - fcz)
   if (dx > dy && dx > dz) rx = -ry - rz
   else if (dy > dz) ry = -rx - rz
   else rz = -rx - ry
-  // Cube → odd-r offset
   return { q: rx + (rz - (rz & 1)) / 2, r: rz }
 }
 
@@ -102,9 +133,22 @@ export function hexPath(ctx: CanvasRenderingContext2D, cx: number, cy: number, s
   ctx.closePath()
 }
 
-export function mapPixelSize(size = HEX_SIZE) {
+export function mapPixelSize(cols = MAP_COLS, rows = MAP_ROWS, size = HEX_SIZE) {
   return {
-    w: size * SQRT3 * (MAP_COLS + 0.5),
-    h: size * (1.5 * MAP_ROWS + 0.5),
+    w: size * SQRT3 * (cols + 0.5),
+    h: size * (1.5 * rows + 0.5),
   }
+}
+
+export function parseHexMapData(raw: unknown): HexMapData | null {
+  if (!raw) return null
+  if (Array.isArray(raw)) {
+    // Legacy: flat array stored before HexMapData format
+    return { cols: MAP_COLS, rows: MAP_ROWS, cells: raw as HexCell[] }
+  }
+  const obj = raw as Record<string, unknown>
+  if (obj.cols && obj.rows && Array.isArray(obj.cells)) {
+    return raw as HexMapData
+  }
+  return null
 }

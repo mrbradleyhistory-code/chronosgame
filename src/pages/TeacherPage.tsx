@@ -1,18 +1,71 @@
-import { useState } from 'react'
+import { useState, useCallback } from 'react'
 import { useAuth } from '../contexts/AuthContext'
 import { CivManager } from '../components/CivManager'
 import { MapCanvas } from '../components/MapCanvas'
+import { supabase } from '../lib/supabase'
+import { generateMap, randomSeed } from '../lib/mapGen'
+import { MAP_SIZE_OPTIONS } from '../lib/hexUtils'
+import type { HexMapData } from '../lib/hexUtils'
 
 export default function TeacherPage() {
   const { user, signInWithGoogle, signOut, loading } = useAuth()
-  const [activeGameId, setActiveGameId] = useState('')
+
+  const [activeGameId, setActiveGameId]       = useState('')
+  const [previewMap, setPreviewMap]           = useState<HexMapData | null>(null)
+  const [currentSeed, setCurrentSeed]         = useState('')
+  const [isLocked, setIsLocked]               = useState(false)
+  const [saving, setSaving]                   = useState(false)
+  const [sizeIdx, setSizeIdx]                 = useState(2) // default: Standard
+  const selectedSize = MAP_SIZE_OPTIONS[sizeIdx]
+
+  // Called when MapCanvas finishes loading from DB
+  const handleMapLoaded = useCallback((map: HexMapData) => {
+    setPreviewMap(null) // clear any preview — DB version is canonical
+    setIsLocked(true)
+    void map
+  }, [])
+
+  function handleGameSelect(id: string) {
+    setActiveGameId(id)
+    setPreviewMap(null)   // reset preview when switching games
+    setIsLocked(false)    // will be set by onMapLoaded if DB has a map
+    setCurrentSeed('')
+  }
+
+  function handleRegenerate() {
+    const seed = randomSeed()
+    setCurrentSeed(seed)
+    const map = generateMap(seed, selectedSize.cols, selectedSize.rows)
+    setPreviewMap(map)
+    setIsLocked(false)
+  }
+
+  async function handleLock() {
+    if (!previewMap || !activeGameId) return
+    setSaving(true)
+    const { error } = await supabase
+      .from('games')
+      .update({ hex_map: previewMap, world_seed: currentSeed })
+      .eq('id', activeGameId)
+    setSaving(false)
+    if (error) { alert(error.message); return }
+    setIsLocked(true)
+  }
+
+  async function handleUnlock() {
+    if (!activeGameId) return
+    if (!confirm('Regenerate will replace the current map. Continue?')) return
+    setSaving(true)
+    await supabase.from('games').update({ hex_map: null }).eq('id', activeGameId)
+    setSaving(false)
+    setIsLocked(false)
+    setPreviewMap(null)
+    // trigger a fresh generation
+    setTimeout(handleRegenerate, 0)
+  }
 
   if (loading) {
-    return (
-      <div className="flex h-screen items-center justify-center bg-slate-900 text-white">
-        <p>Loading…</p>
-      </div>
-    )
+    return <div className="flex h-screen items-center justify-center bg-slate-900 text-white"><p>Loading…</p></div>
   }
 
   if (!user) {
@@ -20,10 +73,7 @@ export default function TeacherPage() {
       <div className="flex h-screen flex-col items-center justify-center gap-6 bg-slate-900 text-white">
         <h1 className="text-3xl font-bold">Chronos — Teacher Portal</h1>
         <p className="text-slate-400">Sign in with your Google account to manage games.</p>
-        <button
-          onClick={signInWithGoogle}
-          className="rounded-lg bg-indigo-600 px-6 py-3 font-semibold hover:bg-indigo-500 transition-colors"
-        >
+        <button onClick={signInWithGoogle} className="rounded-lg bg-indigo-600 px-6 py-3 font-semibold hover:bg-indigo-500 transition-colors">
           Sign in with Google
         </button>
       </div>
@@ -36,46 +86,113 @@ export default function TeacherPage() {
         <h1 className="text-xl font-bold">Teacher Dashboard</h1>
         <div className="flex items-center gap-4">
           <span className="text-sm text-slate-400">{user.email}</span>
-          <button
-            onClick={signOut}
-            className="rounded bg-slate-700 px-3 py-1 text-sm hover:bg-slate-600 transition-colors"
-          >
-            Sign out
-          </button>
+          <button onClick={signOut} className="rounded bg-slate-700 px-3 py-1 text-sm hover:bg-slate-600 transition-colors">Sign out</button>
         </div>
       </header>
 
-      <main className="flex flex-1 overflow-hidden gap-0">
-        {/* Left sidebar: management panel */}
-        <aside className="w-80 shrink-0 overflow-y-auto border-r border-slate-700 p-4">
-          <h2 className="mb-4 text-lg font-semibold">Civilizations &amp; PINs</h2>
-          <CivManager onGameSelect={setActiveGameId} />
+      <main className="flex flex-1 overflow-hidden">
+        {/* Sidebar */}
+        <aside className="w-80 shrink-0 overflow-y-auto border-r border-slate-700 p-4 space-y-5">
+          <div>
+            <h2 className="mb-3 text-sm font-semibold text-slate-300 uppercase tracking-wide">Civilizations &amp; PINs</h2>
+            <CivManager onGameSelect={handleGameSelect} />
+          </div>
 
-          <div className="mt-6 space-y-4">
-            {(['Question Sets', 'Review Sessions'] as const).map((section) => (
+          {activeGameId && (
+            <div className="rounded-xl border border-slate-700 bg-slate-800 p-4 space-y-3">
+              <h2 className="text-sm font-semibold text-slate-300 uppercase tracking-wide">World Map</h2>
+
+              {/* Map size selector */}
+              <div>
+                <label className="block text-xs text-slate-400 mb-1">Map size</label>
+                <select
+                  value={sizeIdx}
+                  onChange={e => setSizeIdx(Number(e.target.value))}
+                  disabled={isLocked}
+                  className="w-full rounded bg-slate-700 border border-slate-600 px-2 py-1.5 text-sm text-white disabled:opacity-50"
+                >
+                  {MAP_SIZE_OPTIONS.map((opt, i) => (
+                    <option key={i} value={i}>{opt.label} — {opt.civHint}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Status + actions */}
+              {isLocked ? (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <span className="h-2 w-2 rounded-full bg-green-400" />
+                    <span className="text-xs text-green-300">Map locked</span>
+                  </div>
+                  <button
+                    onClick={handleUnlock}
+                    disabled={saving}
+                    className="w-full rounded bg-slate-600 border border-slate-500 px-3 py-1.5 text-xs hover:bg-slate-500 disabled:opacity-50 transition-colors"
+                  >
+                    {saving ? 'Working…' : 'Regenerate (replaces current)'}
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {previewMap ? (
+                    <div className="flex items-center gap-2">
+                      <span className="h-2 w-2 rounded-full bg-amber-400" />
+                      <span className="text-xs text-amber-300">Preview — not saved</span>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2">
+                      <span className="h-2 w-2 rounded-full bg-slate-500" />
+                      <span className="text-xs text-slate-400">No map yet</span>
+                    </div>
+                  )}
+                  <button
+                    onClick={handleRegenerate}
+                    className="w-full rounded bg-indigo-700 border border-indigo-600 px-3 py-1.5 text-xs hover:bg-indigo-600 transition-colors"
+                  >
+                    {previewMap ? '↻ Try another' : 'Generate map'}
+                  </button>
+                  {previewMap && (
+                    <button
+                      onClick={handleLock}
+                      disabled={saving}
+                      className="w-full rounded bg-green-700 px-3 py-1.5 text-xs font-semibold hover:bg-green-600 disabled:opacity-50 transition-colors"
+                    >
+                      {saving ? 'Saving…' : '✓ Lock this map'}
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className="space-y-3">
+            {(['Question Sets', 'Review Sessions'] as const).map(section => (
               <div key={section} className="rounded-xl border border-slate-700 bg-slate-800 p-4">
-                <h2 className="mb-1 font-semibold text-sm">{section}</h2>
+                <h2 className="mb-1 text-sm font-semibold">{section}</h2>
                 <p className="text-xs text-slate-400">Coming soon.</p>
               </div>
             ))}
           </div>
         </aside>
 
-        {/* Main area: map */}
+        {/* Map canvas */}
         <div className="flex-1 flex flex-col overflow-hidden">
-          <div className="shrink-0 border-b border-slate-700 px-4 py-2 flex items-center gap-2">
-            <span className="text-sm text-slate-400">World Map</span>
-            {!activeGameId && (
-              <span className="text-xs text-slate-600">— select a game to view</span>
-            )}
+          <div className="shrink-0 border-b border-slate-700 px-4 py-2 flex items-center gap-2 text-sm text-slate-400">
+            World Map
+            {!activeGameId && <span className="text-xs text-slate-600">— select a game to view</span>}
+            {previewMap && !isLocked && <span className="text-xs text-amber-400 ml-2">preview</span>}
+            {isLocked && <span className="text-xs text-green-400 ml-2">locked</span>}
           </div>
           <div className="flex-1 overflow-hidden">
             {activeGameId ? (
-              <MapCanvas viewMode="teacher" gameId={activeGameId} />
+              <MapCanvas
+                viewMode="teacher"
+                gameId={activeGameId}
+                previewMap={previewMap}
+                onMapLoaded={handleMapLoaded}
+              />
             ) : (
-              <div className="flex h-full items-center justify-center text-slate-600 text-sm">
-                No game selected
-              </div>
+              <div className="flex h-full items-center justify-center text-slate-600 text-sm">No game selected</div>
             )}
           </div>
         </div>
