@@ -1,4 +1,5 @@
 import { useAuth } from '../contexts/AuthContext'
+import { CivManager } from '../components/CivManager'
 
 export default function TeacherPage() {
   const { user, signInWithGoogle, signOut, loading } = useAuth()
@@ -6,7 +7,7 @@ export default function TeacherPage() {
   if (loading) {
     return (
       <div className="flex h-screen items-center justify-center bg-slate-900 text-white">
-        <p>Loading...</p>
+        <p>Loading…</p>
       </div>
     )
   }
@@ -14,7 +15,7 @@ export default function TeacherPage() {
   if (!user) {
     return (
       <div className="flex h-screen flex-col items-center justify-center gap-6 bg-slate-900 text-white">
-        <h1 className="text-3xl font-bold">Chronos Game — Teacher Portal</h1>
+        <h1 className="text-3xl font-bold">Chronos — Teacher Portal</h1>
         <p className="text-slate-400">Sign in with your Google account to manage games.</p>
         <button
           onClick={signInWithGoogle}
@@ -43,12 +44,19 @@ export default function TeacherPage() {
 
       <main className="p-6">
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {['Games', 'Question Sets', 'Review Sessions'].map((section) => (
+
+          <div className="rounded-xl border border-slate-700 bg-slate-800 p-6 sm:col-span-2 lg:col-span-1">
+            <h2 className="mb-4 text-lg font-semibold">Civilizations &amp; PINs</h2>
+            <CivManager />
+          </div>
+
+          {['Question Sets', 'Review Sessions'].map((section) => (
             <div key={section} className="rounded-xl border border-slate-700 bg-slate-800 p-6">
               <h2 className="mb-2 text-lg font-semibold">{section}</h2>
-              <p className="text-sm text-slate-400">Placeholder — coming soon.</p>
+              <p className="text-sm text-slate-400">Coming soon.</p>
             </div>
           ))}
+
         </div>
       </main>
     </div>
