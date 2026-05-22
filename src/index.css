@@ -104,12 +104,18 @@
   white-space: nowrap;
 }
 
-.scroll-divider::before,
+.scroll-divider::before {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, #b08040);
+}
+
 .scroll-divider::after {
   content: '';
   flex: 1;
   height: 1px;
-  background: #b08040;
+  background: linear-gradient(90deg, #b08040, transparent);
 }
 
 /* form layout */
