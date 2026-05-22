@@ -5,6 +5,7 @@ import { MapCanvas } from '../components/MapCanvas'
 import { supabase } from '../lib/supabase'
 import { generateMap, randomSeed } from '../lib/mapGen'
 import { MAP_SIZE_OPTIONS } from '../lib/hexUtils'
+import { PRESET_MAPS, generatePreset } from '../lib/presetMaps'
 import type { HexMapData } from '../lib/hexUtils'
 
 export default function TeacherPage() {
@@ -16,6 +17,7 @@ export default function TeacherPage() {
   const [isLocked, setIsLocked]               = useState(false)
   const [saving, setSaving]                   = useState(false)
   const [sizeIdx, setSizeIdx]                 = useState(2) // default: Standard
+  const [presetId, setPresetId]               = useState('')
   const selectedSize = MAP_SIZE_OPTIONS[sizeIdx]
 
   // Called when MapCanvas finishes loading from DB
@@ -33,9 +35,20 @@ export default function TeacherPage() {
   }
 
   function handleRegenerate() {
+    setPresetId('')
     const seed = randomSeed()
     setCurrentSeed(seed)
     const map = generateMap(seed, selectedSize.cols, selectedSize.rows)
+    setPreviewMap(map)
+    setIsLocked(false)
+  }
+
+  function handleLoadPreset(id: string) {
+    setPresetId(id)
+    if (!id) return
+    const map = generatePreset(id)
+    if (!map) return
+    setCurrentSeed(`preset-${id}`)
     setPreviewMap(map)
     setIsLocked(false)
   }
@@ -102,20 +115,43 @@ export default function TeacherPage() {
             <div className="rounded-xl border border-slate-700 bg-slate-800 p-4 space-y-3">
               <h2 className="text-sm font-semibold text-slate-300 uppercase tracking-wide">World Map</h2>
 
-              {/* Map size selector */}
+              {/* Preset maps */}
               <div>
-                <label className="block text-xs text-slate-400 mb-1">Map size</label>
+                <label className="block text-xs text-slate-400 mb-1">Preset map</label>
                 <select
-                  value={sizeIdx}
-                  onChange={e => setSizeIdx(Number(e.target.value))}
+                  value={presetId}
+                  onChange={e => handleLoadPreset(e.target.value)}
                   disabled={isLocked}
                   className="w-full rounded bg-slate-700 border border-slate-600 px-2 py-1.5 text-sm text-white disabled:opacity-50"
                 >
-                  {MAP_SIZE_OPTIONS.map((opt, i) => (
-                    <option key={i} value={i}>{opt.label} — {opt.civHint}</option>
+                  <option value="">— procedural —</option>
+                  {PRESET_MAPS.map(p => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
                   ))}
                 </select>
+                {presetId && (
+                  <p className="mt-1 text-xs text-slate-500">
+                    {PRESET_MAPS.find(p => p.id === presetId)?.description}
+                  </p>
+                )}
               </div>
+
+              {/* Map size selector (only for procedural) */}
+              {!presetId && (
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">Map size</label>
+                  <select
+                    value={sizeIdx}
+                    onChange={e => setSizeIdx(Number(e.target.value))}
+                    disabled={isLocked}
+                    className="w-full rounded bg-slate-700 border border-slate-600 px-2 py-1.5 text-sm text-white disabled:opacity-50"
+                  >
+                    {MAP_SIZE_OPTIONS.map((opt, i) => (
+                      <option key={i} value={i}>{opt.label} — {opt.civHint}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
 
               {/* Status + actions */}
               {isLocked ? (
@@ -145,12 +181,14 @@ export default function TeacherPage() {
                       <span className="text-xs text-slate-400">No map yet</span>
                     </div>
                   )}
-                  <button
-                    onClick={handleRegenerate}
-                    className="w-full rounded bg-indigo-700 border border-indigo-600 px-3 py-1.5 text-xs hover:bg-indigo-600 transition-colors"
-                  >
-                    {previewMap ? '↻ Try another' : 'Generate map'}
-                  </button>
+                  {!presetId && (
+                    <button
+                      onClick={handleRegenerate}
+                      className="w-full rounded bg-indigo-700 border border-indigo-600 px-3 py-1.5 text-xs hover:bg-indigo-600 transition-colors"
+                    >
+                      {previewMap ? '↻ Try another seed' : 'Generate map'}
+                    </button>
+                  )}
                   {previewMap && (
                     <button
                       onClick={handleLock}
