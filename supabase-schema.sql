@@ -262,7 +262,7 @@ begin
     from public.civilizations c
     join public.games g on g.id = c.game_id
     where c.username = p_username
-      and g.status != 'ended'
+      and g.status = 'active'
       and c.pin_hash = crypt(p_raw_pin, c.pin_hash);
 end;
 $$;
