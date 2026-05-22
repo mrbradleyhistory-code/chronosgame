@@ -22,7 +22,11 @@ interface RevealedPin {
   pin: string
 }
 
-export function CivManager() {
+interface CivManagerProps {
+  onGameSelect?: (gameId: string) => void
+}
+
+export function CivManager({ onGameSelect }: CivManagerProps = {}) {
   const { user } = useAuth()
   const [games, setGames] = useState<Game[]>([])
   const [selectedGameId, setSelectedGameId] = useState('')
@@ -59,7 +63,14 @@ export function CivManager() {
       .order('created_at', { ascending: false })
     if (data) {
       setGames(data)
-      if (data.length > 0) setSelectedGameId((prev) => prev || data[0].id)
+      if (data.length > 0) {
+        const first = data[0].id
+        setSelectedGameId((prev) => {
+          const id = prev || first
+          onGameSelect?.(id)
+          return id
+        })
+      }
     }
   }
 
@@ -135,7 +146,7 @@ export function CivManager() {
       <div className="flex items-center gap-2 mb-4">
         <select
           value={selectedGameId}
-          onChange={(e) => setSelectedGameId(e.target.value)}
+          onChange={(e) => { setSelectedGameId(e.target.value); onGameSelect?.(e.target.value) }}
           className="flex-1 min-w-0 rounded bg-slate-700 border border-slate-600 px-3 py-1.5 text-sm text-white"
         >
           {games.length === 0 && <option value="">No games yet</option>}

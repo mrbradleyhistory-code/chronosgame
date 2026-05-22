@@ -1,5 +1,6 @@
 import { useStudent } from '../contexts/StudentContext'
 import { StudentLogin } from '../components/StudentLogin'
+import { MapCanvas } from '../components/MapCanvas'
 
 export default function StudentPage() {
   const { civ, logout } = useStudent()
@@ -9,8 +10,8 @@ export default function StudentPage() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-900 text-white">
-      <header className="flex items-center justify-between border-b border-slate-700 px-6 py-4">
+    <div className="min-h-screen bg-slate-900 text-white flex flex-col">
+      <header className="flex items-center justify-between border-b border-slate-700 px-6 py-4 shrink-0">
         <div className="flex items-center gap-3">
           <span
             className="h-3.5 w-3.5 rounded-full"
@@ -31,15 +32,21 @@ export default function StudentPage() {
         </div>
       </header>
 
-      <main className="p-6">
-        <div className="grid gap-4 sm:grid-cols-2">
+      <main className="flex flex-1 overflow-hidden gap-0">
+        {/* Map fills most of the screen */}
+        <div className="flex-1 overflow-hidden">
+          <MapCanvas viewMode="student" gameId={civ.game_id} civId={civ.id} />
+        </div>
+
+        {/* Right sidebar: game panels */}
+        <aside className="w-64 shrink-0 overflow-y-auto border-l border-slate-700 p-4 space-y-4">
           {(['Resources', 'Actions', 'Technologies', 'Messages'] as const).map((panel) => (
-            <div key={panel} className="rounded-xl border border-slate-700 bg-slate-800 p-6">
-              <h2 className="mb-2 text-lg font-semibold">{panel}</h2>
-              <p className="text-sm text-slate-400">Coming soon.</p>
+            <div key={panel} className="rounded-xl border border-slate-700 bg-slate-800 p-4">
+              <h2 className="mb-1 font-semibold text-sm">{panel}</h2>
+              <p className="text-xs text-slate-400">Coming soon.</p>
             </div>
           ))}
-        </div>
+        </aside>
       </main>
     </div>
   )

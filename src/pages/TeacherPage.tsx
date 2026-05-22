@@ -1,8 +1,11 @@
+import { useState } from 'react'
 import { useAuth } from '../contexts/AuthContext'
 import { CivManager } from '../components/CivManager'
+import { MapCanvas } from '../components/MapCanvas'
 
 export default function TeacherPage() {
   const { user, signInWithGoogle, signOut, loading } = useAuth()
+  const [activeGameId, setActiveGameId] = useState('')
 
   if (loading) {
     return (
@@ -28,8 +31,8 @@ export default function TeacherPage() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-900 text-white">
-      <header className="flex items-center justify-between border-b border-slate-700 px-6 py-4">
+    <div className="min-h-screen bg-slate-900 text-white flex flex-col">
+      <header className="flex items-center justify-between border-b border-slate-700 px-6 py-4 shrink-0">
         <h1 className="text-xl font-bold">Teacher Dashboard</h1>
         <div className="flex items-center gap-4">
           <span className="text-sm text-slate-400">{user.email}</span>
@@ -42,21 +45,39 @@ export default function TeacherPage() {
         </div>
       </header>
 
-      <main className="p-6">
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      <main className="flex flex-1 overflow-hidden gap-0">
+        {/* Left sidebar: management panel */}
+        <aside className="w-80 shrink-0 overflow-y-auto border-r border-slate-700 p-4">
+          <h2 className="mb-4 text-lg font-semibold">Civilizations &amp; PINs</h2>
+          <CivManager onGameSelect={setActiveGameId} />
 
-          <div className="rounded-xl border border-slate-700 bg-slate-800 p-6 sm:col-span-2 lg:col-span-1">
-            <h2 className="mb-4 text-lg font-semibold">Civilizations &amp; PINs</h2>
-            <CivManager />
+          <div className="mt-6 space-y-4">
+            {(['Question Sets', 'Review Sessions'] as const).map((section) => (
+              <div key={section} className="rounded-xl border border-slate-700 bg-slate-800 p-4">
+                <h2 className="mb-1 font-semibold text-sm">{section}</h2>
+                <p className="text-xs text-slate-400">Coming soon.</p>
+              </div>
+            ))}
           </div>
+        </aside>
 
-          {['Question Sets', 'Review Sessions'].map((section) => (
-            <div key={section} className="rounded-xl border border-slate-700 bg-slate-800 p-6">
-              <h2 className="mb-2 text-lg font-semibold">{section}</h2>
-              <p className="text-sm text-slate-400">Coming soon.</p>
-            </div>
-          ))}
-
+        {/* Main area: map */}
+        <div className="flex-1 flex flex-col overflow-hidden">
+          <div className="shrink-0 border-b border-slate-700 px-4 py-2 flex items-center gap-2">
+            <span className="text-sm text-slate-400">World Map</span>
+            {!activeGameId && (
+              <span className="text-xs text-slate-600">— select a game to view</span>
+            )}
+          </div>
+          <div className="flex-1 overflow-hidden">
+            {activeGameId ? (
+              <MapCanvas viewMode="teacher" gameId={activeGameId} />
+            ) : (
+              <div className="flex h-full items-center justify-center text-slate-600 text-sm">
+                No game selected
+              </div>
+            )}
+          </div>
         </div>
       </main>
     </div>
