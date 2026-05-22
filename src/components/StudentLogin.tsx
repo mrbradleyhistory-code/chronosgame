@@ -45,14 +45,14 @@ export function StudentLogin() {
           <form onSubmit={handleSubmit} className="scroll-form">
             <div className="form-group">
               <label className="parchment-label" htmlFor="civ-username">
-                Civilization Name
+                Login Name
               </label>
               <input
                 id="civ-username"
                 type="text"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
-                placeholder="e.g. Athens"
+                placeholder="e.g. athens"
                 required
                 disabled={loading}
                 className="parchment-input"
