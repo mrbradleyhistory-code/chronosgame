@@ -1,6 +1,10 @@
 -- ============================================================
 -- Chronos Game — Supabase Schema
 -- Run this in the Supabase SQL editor (Dashboard → SQL Editor)
+--
+-- Idempotent where possible: safe to re-run on a project that
+-- already has these tables/policies (e.g. after an earlier deploy).
+-- New columns still require separate ALTER migrations.
 -- ============================================================
 
 -- Enable UUID extension (already enabled on Supabase)
@@ -9,7 +13,7 @@ create extension if not exists "uuid-ossp";
 -- ------------------------------------------------------------
 -- games
 -- ------------------------------------------------------------
-create table public.games (
+create table if not exists public.games (
   id           uuid primary key default uuid_generate_v4(),
   name         text not null,
   class_name   text not null,
@@ -23,6 +27,9 @@ create table public.games (
 
 alter table public.games enable row level security;
 
+drop policy if exists "Teachers manage own games" on public.games;
+drop policy if exists "Anyone can read active games" on public.games;
+
 create policy "Teachers manage own games"
   on public.games for all
   using (auth.uid() = teacher_id);
@@ -34,7 +41,7 @@ create policy "Anyone can read active games"
 -- ------------------------------------------------------------
 -- civilizations
 -- ------------------------------------------------------------
-create table public.civilizations (
+create table if not exists public.civilizations (
   id            uuid primary key default uuid_generate_v4(),
   game_id       uuid not null references public.games(id) on delete cascade,
   group_name    text not null,
@@ -49,6 +56,8 @@ create table public.civilizations (
 );
 
 alter table public.civilizations enable row level security;
+
+drop policy if exists "Teacher reads all civs in own game" on public.civilizations;
 
 create policy "Teacher reads all civs in own game"
   on public.civilizations for all
@@ -65,7 +74,7 @@ create policy "Teacher reads all civs in own game"
 -- ------------------------------------------------------------
 -- turns
 -- ------------------------------------------------------------
-create table public.turns (
+create table if not exists public.turns (
   id           uuid primary key default uuid_generate_v4(),
   game_id      uuid not null references public.games(id) on delete cascade,
   turn_number  integer not null,
@@ -76,6 +85,9 @@ create table public.turns (
 );
 
 alter table public.turns enable row level security;
+
+drop policy if exists "Anyone reads turns for active games" on public.turns;
+drop policy if exists "Teacher manages turns" on public.turns;
 
 create policy "Anyone reads turns for active games"
   on public.turns for select
@@ -98,7 +110,7 @@ create policy "Teacher manages turns"
 -- ------------------------------------------------------------
 -- actions
 -- ------------------------------------------------------------
-create table public.actions (
+create table if not exists public.actions (
   id           uuid primary key default uuid_generate_v4(),
   game_id      uuid not null references public.games(id) on delete cascade,
   civ_id       uuid not null references public.civilizations(id) on delete cascade,
@@ -110,6 +122,8 @@ create table public.actions (
 );
 
 alter table public.actions enable row level security;
+
+drop policy if exists "Teacher reads/manages actions in own game" on public.actions;
 
 create policy "Teacher reads/manages actions in own game"
   on public.actions for all
@@ -123,7 +137,7 @@ create policy "Teacher reads/manages actions in own game"
 -- ------------------------------------------------------------
 -- messages
 -- ------------------------------------------------------------
-create table public.messages (
+create table if not exists public.messages (
   id         uuid primary key default uuid_generate_v4(),
   game_id    uuid not null references public.games(id) on delete cascade,
   content    text not null,
@@ -132,6 +146,9 @@ create table public.messages (
 );
 
 alter table public.messages enable row level security;
+
+drop policy if exists "Anyone reads messages for active games" on public.messages;
+drop policy if exists "Teacher manages messages" on public.messages;
 
 create policy "Anyone reads messages for active games"
   on public.messages for select
@@ -154,7 +171,7 @@ create policy "Teacher manages messages"
 -- ------------------------------------------------------------
 -- question_sets
 -- ------------------------------------------------------------
-create table public.question_sets (
+create table if not exists public.question_sets (
   id          uuid primary key default uuid_generate_v4(),
   teacher_id  uuid not null references auth.users(id) on delete cascade,
   name        text not null,
@@ -164,6 +181,8 @@ create table public.question_sets (
 
 alter table public.question_sets enable row level security;
 
+drop policy if exists "Teacher manages own question sets" on public.question_sets;
+
 create policy "Teacher manages own question sets"
   on public.question_sets for all
   using (auth.uid() = teacher_id);
@@ -171,7 +190,7 @@ create policy "Teacher manages own question sets"
 -- ------------------------------------------------------------
 -- review_sessions
 -- ------------------------------------------------------------
-create table public.review_sessions (
+create table if not exists public.review_sessions (
   id                    uuid primary key default uuid_generate_v4(),
   game_id               uuid not null references public.games(id) on delete cascade,
   question_set_id       uuid not null references public.question_sets(id),
@@ -182,6 +201,9 @@ create table public.review_sessions (
 );
 
 alter table public.review_sessions enable row level security;
+
+drop policy if exists "Teacher manages review sessions" on public.review_sessions;
+drop policy if exists "Anyone reads active review sessions" on public.review_sessions;
 
 create policy "Teacher manages review sessions"
   on public.review_sessions for all
@@ -199,7 +221,7 @@ create policy "Anyone reads active review sessions"
 -- ------------------------------------------------------------
 -- review_answers
 -- ------------------------------------------------------------
-create table public.review_answers (
+create table if not exists public.review_answers (
   id                uuid primary key default uuid_generate_v4(),
   review_session_id uuid not null references public.review_sessions(id) on delete cascade,
   question_id       text not null,
@@ -210,6 +232,8 @@ create table public.review_answers (
 );
 
 alter table public.review_answers enable row level security;
+
+drop policy if exists "Teacher reads answers" on public.review_answers;
 
 create policy "Teacher reads answers"
   on public.review_answers for select
@@ -233,10 +257,14 @@ create extension if not exists pgcrypto;
 -- Called by unauthenticated students; bypasses RLS via SECURITY
 -- DEFINER. Returns the matching civ row (excluding pin_hash) or
 -- nothing if the username/PIN pair is wrong.
+-- PostgREST can bind alphabetically sorted keys → first arg = PIN (p_raw_pin before p_username).
+-- Postgres cannot rename parameter identifiers with CREATE OR REPLACE alone.
 -- ------------------------------------------------------------
+drop function if exists public.verify_student_pin(text, text);
+
 create or replace function public.verify_student_pin(
-  p_username text,
-  p_raw_pin  text
+  p_raw_pin  text,
+  p_username text
 )
 returns table(
   id            uuid,
@@ -252,7 +280,7 @@ returns table(
 )
 language plpgsql
 security definer
-set search_path = public
+set search_path = public, extensions
 as $$
 begin
   return query
@@ -261,7 +289,7 @@ begin
            c.action_points, c.color
     from public.civilizations c
     join public.games g on g.id = c.game_id
-    where c.username = p_username
+    where c.username = lower(trim(p_username))
       and g.status = 'active'
       and c.pin_hash = crypt(p_raw_pin, c.pin_hash);
 end;
@@ -279,7 +307,7 @@ create or replace function public.reset_civ_pin(p_civ_id uuid)
 returns text
 language plpgsql
 security definer
-set search_path = public
+set search_path = public, extensions
 as $$
 declare
   v_pin text;
@@ -295,7 +323,7 @@ begin
   v_pin := lpad((floor(random() * 10000))::int::text, 4, '0');
 
   update public.civilizations
-  set pin_hash = crypt(v_pin, gen_salt('bf', 10))
+  set pin_hash = crypt(v_pin, gen_salt('bf'::text, 10))
   where id = p_civ_id;
 
   return v_pin;
@@ -318,7 +346,7 @@ create or replace function public.create_civ_with_pin(
 returns table(civ_id uuid, pin text)
 language plpgsql
 security definer
-set search_path = public
+set search_path = public, extensions
 as $$
 declare
   v_pin    text;
@@ -335,7 +363,7 @@ begin
 
   insert into public.civilizations(game_id, group_name, username, pin_hash, color)
   values (p_game_id, p_group_name, p_username,
-          crypt(v_pin, gen_salt('bf', 10)), p_color)
+          crypt(v_pin, gen_salt('bf'::text, 10)), p_color)
   returning id into v_civ_id;
 
   return query select v_civ_id, v_pin;

@@ -1,6 +1,19 @@
 -- ============================================================
 -- Chronos — turn planning queues + student play RPCs + buildings
--- Run in Supabase SQL Editor after base schema / pins migrations.
+--
+-- HOW TO RUN THIS (you can run the ENTIRE file at once)
+-- ------------------------------------------------------------
+-- 1. Open the Supabase website and sign in.
+-- 2. Click your Chronos project.
+-- 3. In the left sidebar, click "SQL Editor".
+-- 4. Click "New query".
+-- 5. Open this file on your computer, select everything (Cmd+A), copy (Cmd+C).
+-- 6. Paste into the big empty box in Supabase, then click "Run" (or press Cmd+Enter).
+-- 7. If it says "Success", you're done. If you changed functions and the game
+--    still acts odd, run this one line in a new query:  notify pgrst, 'reload schema';
+--
+-- Run after your main game tables exist (games, civilizations). If you have not
+-- run the base schema yet, do that first.
 -- Enable Realtime (Dashboard → Database → Replication) for:
 --   public.games
 -- ============================================================
@@ -64,11 +77,25 @@ create policy "Anyone can read civ rows in playable games"
   );
 
 -- ------------------------------------------------------------
+-- Student RPCs — PostgREST can bind alphabetically sorted JSON keys to arg order:
+--   • verify_student_pin(p_raw_pin, p_username)
+--   • get_student_play_state — same PIN pair naming
+--   • submit_turn_queue(p_raw_pin, p_slots, p_username) → pin, payload, civ name
+-- Renaming identifiers requires DROP — CREATE OR REPLACE cannot rename parameters.
+-- ------------------------------------------------------------
+-- Postgres distinguishes overloads by arg *types*: old submit was (text,text,jsonb);
+-- current is PIN text, slots jsonb, username text → (text, jsonb, text). Drop both.
+drop function if exists public.submit_turn_queue(text, text, jsonb);
+drop function if exists public.submit_turn_queue(text, jsonb, text);
+drop function if exists public.get_student_play_state(text, text);
+drop function if exists public.verify_student_pin(text, text);
+
+-- ------------------------------------------------------------
 -- verify_student_pin — include buildings column in return set
 -- ------------------------------------------------------------
 create or replace function public.verify_student_pin(
-  p_username text,
-  p_raw_pin  text
+  p_raw_pin  text,
+  p_username text
 )
 returns table(
   id             uuid,
@@ -85,7 +112,7 @@ returns table(
 )
 language plpgsql
 security definer
-set search_path = public
+set search_path = public, extensions
 as $$
 begin
   return query
@@ -94,7 +121,7 @@ begin
            c.action_points, c.color, coalesce(c.buildings, '[]'::jsonb)
     from public.civilizations c
     join public.games g on g.id = c.game_id
-    where c.username = p_username
+    where c.username = lower(trim(p_username))
       and g.status = 'active'
       and c.pin_hash = crypt(p_raw_pin, c.pin_hash);
 end;
@@ -103,17 +130,17 @@ $$;
 grant execute on function public.verify_student_pin(text, text) to anon, authenticated;
 
 -- ------------------------------------------------------------
--- get_student_play_state — authenticated by PIN pair
+-- get_student_play_state — authenticated by PIN pair (same keys as verify_student_pin)
 -- Returns civ JSON + game snippet + queued slots this turn.
 -- ------------------------------------------------------------
 create or replace function public.get_student_play_state(
-  p_username text,
-  p_raw_pin  text
+  p_raw_pin  text,
+  p_username text
 )
 returns jsonb
 language plpgsql
 security definer
-set search_path = public
+set search_path = public, extensions
 as $$
 declare
   row record;
@@ -184,17 +211,17 @@ $$;
 grant execute on function public.get_student_play_state(text, text) to anon, authenticated;
 
 -- ------------------------------------------------------------
--- submit_turn_queue — replace up to 3 slots after PIN check.
+-- submit_turn_queue — replace up to 3 slots after PIN check (arg names/order for PostgREST).
 -- ------------------------------------------------------------
 create or replace function public.submit_turn_queue(
-  p_username text,
-  p_raw_pin text,
-  p_slots jsonb
+  p_raw_pin  text,
+  p_slots    jsonb,
+  p_username text
 )
 returns jsonb
 language plpgsql
 security definer
-set search_path = public
+set search_path = public, extensions
 as $$
 declare
   v_civ record;
@@ -259,7 +286,7 @@ begin
 end;
 $$;
 
-grant execute on function public.submit_turn_queue(text, text, jsonb) to anon, authenticated;
+grant execute on function public.submit_turn_queue(text, jsonb, text) to anon, authenticated;
 
 -- ------------------------------------------------------------
 -- Migration: widen action_type constraint on existing installs

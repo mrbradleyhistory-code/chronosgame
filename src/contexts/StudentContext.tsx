@@ -140,8 +140,8 @@ export function StudentProvider({ children }: { children: ReactNode }) {
   async function login(username: string, rawPin: string): Promise<string | null> {
     const u = username.toLowerCase().trim()
     const { data, error } = await supabase.rpc('verify_student_pin', {
-      p_username: u,
       p_raw_pin: rawPin,
+      p_username: u,
     })
 
     if (error) return error.message
@@ -169,8 +169,8 @@ export function StudentProvider({ children }: { children: ReactNode }) {
       return { error: 'No ink in the reed — leave the realm and sign in anew.' }
 
     const { data, error } = await supabase.rpc('get_student_play_state', {
-      p_username: cred.username,
       p_raw_pin: cred.pin,
+      p_username: cred.username,
     })
 
     if (error) return { error: error.message }
@@ -191,9 +191,9 @@ export function StudentProvider({ children }: { children: ReactNode }) {
       if (!cred) return 'Session vanished — reopen the seals with your PIN.'
 
       const { error } = await supabase.rpc('submit_turn_queue', {
-        p_username: cred.username,
         p_raw_pin: cred.pin,
         p_slots: slots,
+        p_username: cred.username,
       })
 
       return error?.message ?? null

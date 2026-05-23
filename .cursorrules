@@ -1,0 +1,218 @@
+# Chronos — Cursor Project Rules
+
+## What this app is
+Chronos is a classroom civilisation strategy game. A **teacher** creates a game, generates a hex map, and hands out PINs. **Students** log in as civilisations and play on the hex map in real time. A **projector** view shows the live map on a classroom screen.
+
+Three routes:
+- `/teacher` — game/civ management, map generation, PIN distribution
+- `/student` — the player-facing game interface (map + sidebar panels)
+- `/projector` — read-only live display for classroom projection
+
+---
+
+## Tech stack
+- **React 19** with the new JSX transform (no `import React` needed, but use `import type { ReactElement } from 'react'` for return-type annotations — do NOT use `JSX.Element`, that namespace is not in scope)
+- **TypeScript ~6.0** — strict mode; prefer `type` imports for interfaces
+- **Vite 8** with `@tailwindcss/vite` plugin
+- **Tailwind CSS 4** — utility-first; config is minimal, just the Vite plugin
+- **Supabase** (`@supabase/supabase-js`) — Postgres + Realtime + RPC functions; client is `src/lib/supabase.ts`
+- **React Router v7** — `<BrowserRouter>` wrapping, three routes in `src/App.tsx`
+- No Redux, no Zustand — state lives in two React Contexts + component-local state
+
+---
+
+## Directory layout
+```
+src/
+  components/       # Reusable UI components
+  contexts/         # AuthContext (Google OAuth), StudentContext (civ session)
+  lib/              # Pure utilities: hexUtils, mapGen, presetMaps, statsCalc, supabase
+  pages/            # Route-level components: TeacherPage, StudentPage, ProjectorPage
+  types/            # Shared TypeScript interfaces (resources.ts)
+  index.css         # Global styles — Tailwind import + parchment theme CSS
+  App.tsx           # Router
+  main.tsx          # Entry point, Context providers
+```
+
+---
+
+## Key types — know these before touching game logic
+
+### `HexCell` (`src/lib/hexUtils.ts`)
+```ts
+interface HexCell {
+  q: number          // column (odd-r offset layout)
+  r: number          // row
+  terrain: TerrainType
+  resource: ResourceType | null
+  owner: string | null   // civilization id
+  explored_by: string[]
+}
+type TerrainType = 'plains'|'forest'|'hills'|'desert'|'coast'|'river'|'mountain'|'lake'|'jungle'|'steppe'|'tundra'
+type ResourceType = 'wheat'|'wood'|'stone'|'iron'|'gold'|'gems'|'fish'
+```
+
+### `Civilization` (`src/contexts/StudentContext.tsx`)
+```ts
+interface Civilization {
+  id: string
+  game_id: string
+  group_name: string
+  username: string
+  resources: Record<string, unknown>  // JSONB — parse with parseCivResources()
+  territory: unknown                   // JSONB
+  techs: string[]
+  policies: string[]
+  action_points: number
+  color: string   // hex color e.g. '#4f8ef7'
+}
+```
+
+### `CivResources` (`src/types/resources.ts`)
+```ts
+interface CivResources {
+  // Core stats (derived each turn)
+  population: number;  military: number;  wealth: number;  knowledge: number
+  // Trade resources (accumulated from terrain)
+  food: number;  timber: number;  gold: number;  stone: number
+  // Luxury resources (boolean — owning the right hex type grants access)
+  spices: boolean;  silk: boolean;  marble: boolean;  horses: boolean;  iron: boolean
+}
+```
+
+### `GameSettings` (`src/types/resources.ts`)
+```ts
+interface GameSettings {
+  resourceMultiplier: number   // scales all terrain production (default 1.0)
+  growthRate: number           // population added per food-surplus point per turn
+  militaryMaintenance: number  // gold consumed per military point per turn
+  knowledgeRate: number        // knowledge gained per tech per turn
+}
+```
+
+---
+
+## Game logic (`src/lib/statsCalc.ts`)
+- `parseCivResources(raw)` — converts raw JSONB to `CivResources` with safe defaults. Always use this instead of reading `civ.resources` directly.
+- `calculateStatsForTurn(civ, settings, ownedCells?)` — full one-turn simulation: terrain production → tech bonuses → policy multipliers → population/military/knowledge derivation → luxury detection.
+
+### Terrain → resource mapping
+| Terrain  | Produces          |
+|----------|-------------------|
+| plains   | +2 food           |
+| steppe   | +1 food           |
+| forest   | +2 timber         |
+| jungle   | +1 timber, silk luxury |
+| hills    | +2 stone          |
+| mountain | +1 stone          |
+| coast    | +2 wealth         |
+| river    | +1 food, +1 wealth|
+| desert/lake/tundra | nothing |
+
+### Luxury resource sources
+| Luxury  | Granted by                              |
+|---------|-----------------------------------------|
+| spices  | hex with `resource === 'gems'`          |
+| silk    | `terrain === 'jungle'`                  |
+| marble  | `resource === 'stone'` on hills/mountain|
+| horses  | `terrain === 'steppe'` or `'plains'`    |
+| iron    | `resource === 'iron'`                   |
+
+---
+
+## Hex coordinate system
+- **Odd-r offset layout**, pointy-top hexagons
+- `hexToPixel(q, r)` and `pixelToHex(px, py)` in `src/lib/hexUtils.ts`
+- Default map: 30 cols × 20 rows, `HEX_SIZE = 36`
+- The map is rendered on an HTML5 Canvas (`MapCanvas.tsx`) — no DOM hexes, pure 2D drawing
+
+---
+
+## Visual theme — the parchment system
+
+### Two palettes
+**Parchment (light) — login, StatPanel, any foreground cards:**
+- Background: `#f4e4c1` → `#eed9a2` → `#dfc080`
+- Borders: `#7a4e1e` (outer), `#c8a96e` (inner accent)
+- Text: `#3a2210` (body), `#5c3312` (labels), `#7a4e1e` (secondary)
+- Font: `'Cinzel', serif` for headings/labels/values; `'Uncial Antiqua', cursive` for subtitles
+
+**Dark parchment — ResourceBar, header accents:**
+- Background: `#1e1208` → `#150d05`
+- Text/icons: `#c8a96e` (icons), `#e8d5a0` (values)
+- Borders: `rgba(200, 169, 110, 0.2)`
+
+### Shared CSS classes (defined in `src/index.css`)
+```
+.scroll-ornament.top / .bottom  — brown rod with ornament-line + ornament-symbol
+.scroll-card                     — full parchment card with double-border box-shadow
+.scroll-body / .scroll-title / .scroll-subtitle / .scroll-divider
+.parchment-label / .parchment-input / .parchment-btn / .parchment-error
+.pin-input-row / .pin-box
+.stat-panel / .stat-grid / .stat-cell / .stat-icon-wrap / .stat-label / .stat-value
+.resource-bar / .res-trade-group / .res-trade-item / .res-trade-icon / .res-trade-value
+.res-lux-group / .res-lux-badge / .res-lux-owned / .res-lux-absent
+```
+
+Always extend existing CSS classes rather than duplicating the color values inline. New parchment-themed components should reuse `.scroll-ornament`, `.parchment-btn`, etc. where possible.
+
+---
+
+## Supabase schema (key tables)
+```sql
+games (id, world_seed, hex_map jsonb, status, current_turn)
+  status: 'lobby' | 'active' | 'paused' | 'review' | 'ended'
+
+civilizations (id, game_id, group_name, username, pin_hash,
+               resources jsonb, territory jsonb, techs jsonb,
+               policies jsonb, action_points int, color text)
+```
+
+### RPC functions
+- `verify_student_pin(p_raw_pin, p_username)`, `get_student_play_state`(same keys), `submit_turn_queue(p_raw_pin, p_slots, p_username)` — PostgREST arg naming (StudentContext)
+- `reset_civ_pin(civ_id)` → new plaintext PIN
+- `create_civ_with_pin(game_id, username, group_name, color)` → civ + PIN
+
+---
+
+## State management
+- **`AuthContext`** — Google OAuth session (`useAuth()`)
+- **`StudentContext`** — active civ, login/logout, localStorage persistence under key `chronos_student_civ` (`useStudent()`)
+- No global store for game/map state — data is fetched per-component from Supabase and passed as props
+
+---
+
+## Component conventions
+- Named exports for all components (`export function Foo`)
+- Props interfaces defined inline above the component
+- `useMemo` for any derived data from `civ.resources` (use `parseCivResources` inside the memo)
+- Inline SVG icons defined as plain functions at the top of the file — `viewBox="0 0 24 24"`, `fill="none"`, `stroke="currentColor"` so they inherit text color
+- No icon libraries are installed — build SVG icons by hand or use Unicode symbols in Cinzel font
+
+---
+
+## Coding conventions
+- Prefer `const` arrow functions for internal helpers, named `function` declarations for exported components
+- Group file sections with `// ─── Section name ───` comment dividers
+- TypeScript: use `Partial<Record<...>>` for sparse lookup tables, `Pick<T, ...>` for subset prop types
+- Avoid `any` — use `unknown` + type guards instead
+- CSS: add new classes to `src/index.css` at the bottom, grouped under a `/* === SECTION === */` header
+- No `console.log` left in committed code
+
+---
+
+## What's been built so far
+- Hex map generation (procedural + 6 historical presets)
+- Canvas map renderer with pan/zoom, terrain sprites, fog of war
+- Teacher page: game creation, civ management, PIN system
+- Student login: parchment scroll card, PIN input
+- Student page: map canvas + sidebar with StatPanel and ResourceBar
+- `calculateStatsForTurn` utility covering terrain, tech, policy, population, military, knowledge
+- Projector view (read-only map display)
+
+## What's coming next (from the dev roadmap)
+- Actions panel (spend action points to claim hexes, build, etc.)
+- Tech tree panel
+- Real-time Supabase subscriptions for live civ updates
+- Turn processing / end-of-turn flow
+- Teacher controls for advancing turns and adjusting game settings

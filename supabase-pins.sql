@@ -1,5 +1,5 @@
 -- Run this any time to install or reinstall the PIN management functions.
--- Safe to re-run — uses CREATE OR REPLACE and IF NOT EXISTS.
+-- Safe to re-run — uses DROP + CREATE OR REPLACE where Postgres requires it.
 
 -- Add 'paused' to the games status constraint (safe to re-run)
 alter table public.games drop constraint if exists games_status_check;
@@ -8,10 +8,14 @@ alter table public.games add constraint games_status_check
 
 create extension if not exists pgcrypto;
 
--- verify_student_pin: called by unauthenticated students
+-- Renaming RPC parameters requires DROP — Postgres forbids renaming args via CREATE OR REPLACE.
+drop function if exists public.verify_student_pin(text, text);
+
+-- verify_student_pin: called by unauthenticated students (anon).
+-- PostgREST can bind alphabetically sorted keys → first arg MUST be PIN (p_raw_pin < p_username).
 create or replace function public.verify_student_pin(
-  p_username text,
-  p_raw_pin  text
+  p_raw_pin  text,
+  p_username text
 )
 returns table(
   id            uuid,
@@ -36,7 +40,7 @@ begin
            c.action_points, c.color
     from public.civilizations c
     join public.games g on g.id = c.game_id
-    where c.username = p_username
+    where c.username = lower(trim(p_username))
       and g.status = 'active'
       and c.pin_hash = crypt(p_raw_pin, c.pin_hash);
 end;
@@ -65,7 +69,7 @@ begin
   v_pin := lpad((floor(random() * 10000))::int::text, 4, '0');
 
   update public.civilizations
-  set pin_hash = crypt(v_pin, gen_salt('bf', 10))
+  set pin_hash = crypt(v_pin, gen_salt('bf'::text, 10))
   where id = p_civ_id;
 
   return v_pin;
@@ -101,7 +105,7 @@ begin
 
   insert into public.civilizations(game_id, group_name, username, pin_hash, color)
   values (p_game_id, p_group_name, p_username,
-          crypt(v_pin, gen_salt('bf', 10)), p_color)
+          crypt(v_pin, gen_salt('bf'::text, 10)), p_color)
   returning id into v_civ_id;
 
   return query select v_civ_id, v_pin;
