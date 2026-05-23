@@ -162,7 +162,7 @@ export function TeacherTurnConsole({ gameId }: TeacherTurnConsoleProps) {
             title={
               pendingJudgement
                 ? 'Resolve unsubmitted rulings'
-                : 'Runs TRADE→BUILD→RESEARCH→EXPAND→ATTACK phases, retrains economies, wipes resolved scrolls.'
+                : 'Runs TRADE→BUILD→RESEARCH→EXPLORE→EXPAND→ATTACK phases, retrains economies, wipes resolved scrolls.'
             }
           >
             {advancing ? 'Advancing eras…' : 'Advance Chronos'}

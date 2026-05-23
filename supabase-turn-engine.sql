@@ -22,7 +22,7 @@ create table if not exists public.turn_action_slots (
   turn_number   integer not null,
   slot_index    integer not null check (slot_index >= 0 and slot_index <= 2),
   action_type   text not null check (action_type in (
-    'EXPAND','ATTACK','TRADE','RESEARCH','BUILD','ENACT_POLICY'
+    'EXPAND','EXPLORE','ATTACK','TRADE','RESEARCH','BUILD','ENACT_POLICY'
   )),
   payload       jsonb not null default '{}',
   review_status text not null default 'submitted' check (
@@ -260,3 +260,12 @@ end;
 $$;
 
 grant execute on function public.submit_turn_queue(text, text, jsonb) to anon, authenticated;
+
+-- ------------------------------------------------------------
+-- Migration: widen action_type constraint on existing installs
+-- ------------------------------------------------------------
+alter table public.turn_action_slots drop constraint if exists turn_action_slots_action_type_check;
+alter table public.turn_action_slots add constraint turn_action_slots_action_type_check
+  check (action_type in (
+    'EXPAND','EXPLORE','ATTACK','TRADE','RESEARCH','BUILD','ENACT_POLICY'
+  ));

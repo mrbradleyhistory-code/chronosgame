@@ -7,7 +7,14 @@ import { calculateStatsForTurn, parseCivResources } from './statsCalc'
 import type { CivResources, GameSettings } from '../types/resources'
 import { parseGameSettings, serializeCivResources } from '../types/resources'
 import type { QueueActionType, TurnActionSlotRow } from '../types/actions'
-import { BUILDING_DEFS, RESEARCH_COSTS, bonusActionPointsFromCiv, ADOPTABLE_POLICY_IDS } from './gameContent'
+import { BUILDING_DEFS, bonusActionPointsFromCiv, ADOPTABLE_POLICY_IDS } from './gameContent'
+import {
+  civilizationHasTechAction,
+  civilizationMayBuild,
+  eraOpensOnTurn,
+  getTechDefinition,
+  prerequisitesMet,
+} from './techTree'
 
 /** Max AP budget during planning phase (queued actions must fit). */
 export function maxActionPointsForCiv(settings: GameSettings, techs: string[], policies: string[]): number {
@@ -19,8 +26,9 @@ const PHASE_ORDER: Record<QueueActionType, number> = {
   TRADE: 1,
   BUILD: 2,
   RESEARCH: 3,
-  EXPAND: 4,
-  ATTACK: 5,
+  EXPLORE: 4,
+  EXPAND: 5,
+  ATTACK: 6,
 }
 
 export type ActionOutcomeStatus = 'ok' | 'failed' | 'skipped'
@@ -69,6 +77,22 @@ function revealAround(map: HexMapData, civId: string, q: number, r: number) {
   }
 }
 
+/** True if `civId` may unveil `(q,r)` from an owned or mapped neighbour without entering rival soil. */
+function canScoutFromFrontier(map: HexMapData, civId: string, q: number, r: number): boolean {
+  const tgt = getCellAt(map, q, r)
+  if (!tgt) return false
+  if (tgt.owner && tgt.owner !== civId) return false
+  if (tgt.explored_by.includes(civId)) return false
+
+  for (const nb of oddRNeighbors(q, r, map.cols, map.rows)) {
+    const n = getCellAt(map, nb.q, nb.r)
+    if (!n) continue
+    if (n.owner === civId) return true
+    if (n.explored_by.includes(civId)) return true
+  }
+  return false
+}
+
 function coerceStringArray(raw: unknown): string[] {
   if (!Array.isArray(raw)) return []
   return raw.filter((x): x is string => typeof x === 'string')
@@ -103,6 +127,8 @@ export function queuedActionCost(type: QueueActionType, payload: Record<string, 
     case 'TRADE':
       return 1
     case 'RESEARCH':
+      return 1
+    case 'EXPLORE':
       return 1
     case 'ENACT_POLICY':
       return 1
@@ -276,9 +302,9 @@ export function resolveTurnForGame(args: {
       return
     }
 
-    const cost = RESEARCH_COSTS[techId]
-    if (cost == null) {
-      pushEvt(row, 'failed', 'That discovery is absent from your chronicles')
+    const def = getTechDefinition(techId)
+    if (!def) {
+      pushEvt(row, 'failed', 'That invention is carved on no syllabus stone')
       return
     }
 
@@ -287,6 +313,27 @@ export function resolveTurnForGame(args: {
       return
     }
 
+    const gateTurn = eraOpensOnTurn(def)
+
+    if (args.turnNumberBeingResolved < gateTurn) {
+      pushEvt(
+        row,
+        'failed',
+        `${def.displayName} belongs to Century ${gateTurn}+ — the chronometer has not yet reached that symposium.`,
+        { techId },
+      )
+      return
+    }
+
+    if (!prerequisitesMet(subject.techs, def)) {
+      pushEvt(row, 'failed', `Master all prerequisite doctrines before unveiling «${def.displayName}».`, {
+        techId,
+      })
+      return
+    }
+
+    const cost = def.knowledgeCost
+
     if (subject.resources.knowledge < cost) {
       pushEvt(row, 'failed', `Need ${cost} knowledge (have ${subject.resources.knowledge})`, { techId })
       return
@@ -294,7 +341,7 @@ export function resolveTurnForGame(args: {
 
     subject.resources = { ...subject.resources, knowledge: subject.resources.knowledge - cost }
     subject.techs.add(techId)
-    pushEvt(row, 'ok', `Unlocked «${techId}» scholarship`, { techId })
+    pushEvt(row, 'ok', `Unlocked «${def.displayName}»`, { techId })
   }
 
   const executeBuild = (row: TurnActionSlotRow, payload: Record<string, unknown>, subject: MutableSnapshot): void => {
@@ -318,6 +365,11 @@ export function resolveTurnForGame(args: {
       return
     }
 
+    if (!civilizationMayBuild(subject.techs, buildingIdRaw)) {
+      pushEvt(row, 'failed', 'Grand Wonders demand Architecture mastery before stonemasons will attempt them')
+      return
+    }
+
     const goldNeeded = spec.goldCost ?? 0
     const stoneNeeded = spec.stoneCost ?? 0
 
@@ -334,6 +386,36 @@ export function resolveTurnForGame(args: {
 
     subject.buildings.push({ q, r, buildingId: buildingIdRaw })
     pushEvt(row, 'ok', `${spec.displayName} raised at (${q},${r})`)
+  }
+
+  const executeExplore = (row: TurnActionSlotRow, payload: Record<string, unknown>, voyager: MutableSnapshot): void => {
+    if (!civilizationHasTechAction(voyager.techs, 'EXPLORE')) {
+      pushEvt(row, 'failed', 'Coastal pilots refuse the voyage until Sailing doctrines are inscribed')
+      return
+    }
+
+    const q = coerceNum(payload.q)
+    const r = coerceNum(payload.r)
+    if (q == null || r == null) {
+      pushEvt(row, 'failed', 'EXPLORE needs chart coordinates from the atlas')
+      return
+    }
+
+    const cell = getCellAt(map, q, r)
+    if (!cell) {
+      pushEvt(row, 'failed', 'That bearing lies beyond the rim')
+      return
+    }
+
+    if (!canScoutFromFrontier(map, row.civ_id, q, r)) {
+      pushEvt(row, 'failed', 'Fleet cannot hoist sail — chart no contiguous fog from holdings', { q, r })
+      return
+    }
+
+    cell.explored_by = cell.explored_by.includes(row.civ_id)
+      ? cell.explored_by
+      : [...cell.explored_by, row.civ_id]
+    pushEvt(row, 'ok', `Fleet sounded the fog at (${q},${r})`, { q, r })
   }
 
   const executeExpand = (row: TurnActionSlotRow, payload: Record<string, unknown>): void => {
@@ -469,6 +551,9 @@ export function resolveTurnForGame(args: {
             break
           case 'RESEARCH':
             executeResearch(row, payload, active)
+            break
+          case 'EXPLORE':
+            executeExplore(row, payload, active)
             break
           case 'EXPAND':
             executeExpand(row, payload)

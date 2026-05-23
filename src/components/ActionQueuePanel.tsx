@@ -9,12 +9,16 @@ import {
   queuedActionsSpendAp,
   maxActionPointsForCiv,
 } from '../lib/turnEngine'
+import { BUILDING_DEFS, ADOPTABLE_POLICY_IDS } from '../lib/gameContent'
 import {
-  BUILDING_DEFS,
-  ADOPTABLE_POLICY_IDS,
-  RESEARCH_COSTS,
-  RESEARCH_TECH_ORDER,
-} from '../lib/gameContent'
+  TECH_DEFINITIONS,
+  civilizationHasTechAction,
+  civilizationMayBuild,
+  eraOpensOnTurn,
+  prerequisitesMet,
+} from '../lib/techTree'
+import { parseCivResources } from '../lib/statsCalc'
+import { TechTreePanel } from './TechTreePanel'
 
 interface Peer {
   id: string
@@ -77,6 +81,56 @@ export function ActionQueuePanel({
     [civilization.policies, civilization.techs, settings],
   )
 
+  const researchedTechSet = useMemo(() => new Set(civilization.techs ?? []), [civilization.techs])
+  const knowledgeVault = useMemo(
+    () => parseCivResources(civilization.resources as Record<string, unknown>).knowledge,
+    [civilization.resources],
+  )
+  const exploreUnlocked = useMemo(
+    () => civilizationHasTechAction(civilization.techs ?? [], 'EXPLORE'),
+    [civilization.techs],
+  )
+
+  /** Doctrine scroll options matching resolver gates (excluding knowledge stockpile check). */
+  const attainableResearch = useMemo(
+    () =>
+      TECH_DEFINITIONS.filter(
+        (def) =>
+          !researchedTechSet.has(def.id) &&
+          prerequisitesMet(researchedTechSet, def) &&
+          currentTurn >= eraOpensOnTurn(def),
+      ),
+    [currentTurn, researchedTechSet],
+  )
+
+  const draftedResearchTechId = useMemo(() => {
+    const row = drafts.find((d) => d.action_type === 'RESEARCH' && typeof d.payload.techId === 'string')
+    return row ? (row.payload.techId as string) : undefined
+  }, [drafts])
+
+  const applyResearchPick = useCallback((techId: string, slotHint?: number) => {
+    setDrafts((prev) => {
+      const next = prev.map((row) => ({ ...row, payload: { ...row.payload } }))
+      let applied = false
+      if (typeof slotHint === 'number' && next[slotHint]?.action_type === '') {
+        next[slotHint] = { action_type: 'RESEARCH', payload: { techId } }
+        applied = true
+      } else {
+        const researchIdx = next.findIndex((d) => d.action_type === 'RESEARCH')
+        if (researchIdx >= 0) {
+          next[researchIdx] = { action_type: 'RESEARCH', payload: { techId } }
+          applied = true
+        } else {
+          const blankIdx = next.findIndex((d) => d.action_type === '')
+          if (blankIdx >= 0) {
+            next[blankIdx] = { action_type: 'RESEARCH', payload: { techId } }
+            applied = true
+          }
+        }
+      }
+      return applied ? next : prev
+    })
+  }, [])
   const spend = useMemo(() => {
     const rows = drafts
       .filter((d) => d.action_type !== '')
@@ -105,7 +159,7 @@ export function ActionQueuePanel({
     setNotice('')
     if (
       pinnedHex === null &&
-      stagedRows.some((r) => ['EXPAND', 'ATTACK', 'BUILD'].includes(String(r.draft.action_type)))
+      stagedRows.some((r) => ['EXPAND', 'EXPLORE', 'ATTACK', 'BUILD'].includes(String(r.draft.action_type)))
     ) {
       setError('Tap the map mosaic to emboss coordinates for frontier decrees.')
       return
@@ -146,7 +200,7 @@ export function ActionQueuePanel({
 
   function enrichPayload(slot: DraftSlot): Record<string, unknown> {
     const base = { ...slot.payload }
-    if (['EXPAND', 'ATTACK', 'BUILD'].includes(String(slot.action_type)) && pinnedHex) {
+    if (['EXPAND', 'EXPLORE', 'ATTACK', 'BUILD'].includes(String(slot.action_type)) && pinnedHex) {
       base.q = pinnedHex.q
       base.r = pinnedHex.r
     }
@@ -193,6 +247,9 @@ export function ActionQueuePanel({
           >
             <option value="">— choose decree —</option>
             <option value="EXPAND">Expand borders (1 AP)</option>
+            {exploreUnlocked && (
+              <option value="EXPLORE">Sound coasts · exploration fleet (1 AP)</option>
+            )}
             <option value="ATTACK">Assault neighbouring tile (2 AP)</option>
             <option value="TRADE">Royal caravan gift (1 AP)</option>
             <option value="RESEARCH">Sponsor scholars (1 AP)</option>
@@ -247,9 +304,9 @@ export function ActionQueuePanel({
                 onChange={(e) => updateDraft(slotIdx, { payload: { techId: e.target.value } })}
               >
                 <option value="">— codex entry —</option>
-                {RESEARCH_TECH_ORDER.filter((tid) => !(civilization.techs ?? []).includes(tid)).map((tid) => (
-                  <option key={tid} value={tid}>
-                    {tid.replace(/_/g, ' ')} ({RESEARCH_COSTS[tid]} know.)
+                {attainableResearch.map((def) => (
+                  <option key={def.id} value={def.id}>
+                    {def.displayName} ({def.knowledgeCost} know.)
                   </option>
                 ))}
               </select>
@@ -267,7 +324,9 @@ export function ActionQueuePanel({
                 }
               >
                 <option value="">— structure —</option>
-                {Object.values(BUILDING_DEFS).map((b) => (
+                {Object.values(BUILDING_DEFS)
+                  .filter((b) => civilizationMayBuild(civilization.techs ?? [], b.id))
+                  .map((b) => (
                   <option key={b.id} value={b.id}>
                     {b.displayName} ({b.apCost} AP · {b.goldCost ?? 0}/{b.stoneCost ?? 0})
                   </option>
@@ -294,13 +353,21 @@ export function ActionQueuePanel({
             </div>
           )}
 
-          {['EXPAND', 'ATTACK', 'BUILD'].includes(String(drafts[slotIdx]?.action_type)) && pinnedHex && (
+          {['EXPAND', 'EXPLORE', 'ATTACK', 'BUILD'].includes(String(drafts[slotIdx]?.action_type)) && pinnedHex && (
             <p className="stat-value text-[11px] text-[#7a4e1e]">
               Mosaic focus → ({pinnedHex.q}, {pinnedHex.r})
             </p>
           )}
         </div>
       ))}
+
+      <TechTreePanel
+        researchedIds={Array.from(researchedTechSet)}
+        calendarTurn={currentTurn}
+        knowledge={knowledgeVault}
+        selectedTechId={draftedResearchTechId}
+        onSelectTech={(tid) => applyResearchPick(tid)}
+      />
 
       {queueFromServer.length > 0 && (
         <div className="text-[11px] space-y-1 parchment-label scroll-body">

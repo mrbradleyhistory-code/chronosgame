@@ -2,22 +2,7 @@ import type { HexCell } from './hexUtils'
 import type { CivResources, GameSettings } from '../types/resources'
 import { DEFAULT_CIV_RESOURCES } from '../types/resources'
 import type { Civilization } from '../contexts/StudentContext'
-
-// Per-tech flat bonuses to production each turn
-const TECH_BONUSES: Partial<Record<string, Partial<Record<'food' | 'timber' | 'stone' | 'knowledge' | 'military', number>>>> = {
-  agriculture:    { food: 3 },
-  irrigation:     { food: 5 },
-  crop_rotation:  { food: 7 },
-  logging:        { timber: 3 },
-  masonry:        { stone: 3 },
-  writing:        { knowledge: 3 },
-  library:        { knowledge: 5 },
-  philosophy:     { knowledge: 8 },
-  academy:        { knowledge: 12 },
-  bronze_working: { military: 5 },
-  iron_working:   { military: 10 },
-  tactics:        { military: 15 },
-}
+import { TECH_BY_ID } from './techTree'
 
 // Per-policy multipliers on derived core stats
 const POLICY_MULTIPLIERS: Partial<Record<string, Partial<Record<keyof CivResources, number>>>> = {
@@ -25,6 +10,52 @@ const POLICY_MULTIPLIERS: Partial<Record<string, Partial<Record<keyof CivResourc
   militarism:  { military: 1.5 },
   scholarship: { knowledge: 1.5 },
   agrarianism: { food: 1.3 },
+}
+
+function hasIronIndustryKnowledge(techs: Set<string>): boolean {
+  for (const tid of techs) {
+    if (TECH_BY_ID[tid]?.statBonuses.ironIndustry) return true
+  }
+  return false
+}
+
+/** Flat + per-resource tech modifiers from TECH_DEFINITIONS. */
+function sumTechEconomyBonuses(techs: Set<string>): {
+  foodFlat: number
+  timberFlat: number
+  stoneFlat: number
+  knowledgeFlat: number
+  militaryFlat: number
+  goldFlat: number
+  wealthFlat: number
+  coastFoodBonus: number
+  coastWealthBonus: number
+} {
+  const acc = {
+    foodFlat: 0,
+    timberFlat: 0,
+    stoneFlat: 0,
+    knowledgeFlat: 0,
+    militaryFlat: 0,
+    goldFlat: 0,
+    wealthFlat: 0,
+    coastFoodBonus: 0,
+    coastWealthBonus: 0,
+  }
+  for (const tid of techs) {
+    const b = TECH_BY_ID[tid]?.statBonuses
+    if (!b) continue
+    acc.foodFlat        += b.food           ?? 0
+    acc.timberFlat      += b.timber         ?? 0
+    acc.stoneFlat       += b.stone          ?? 0
+    acc.knowledgeFlat   += b.knowledge      ?? 0
+    acc.militaryFlat    += b.military       ?? 0
+    acc.goldFlat        += b.gold           ?? 0
+    acc.wealthFlat      += b.wealth         ?? 0
+    acc.coastFoodBonus  += b.coastalFood    ?? 0
+    acc.coastWealthBonus += b.coastalWealth ?? 0
+  }
+  return acc
 }
 
 // Luxury resources are claimed by owning specific hex types
@@ -76,9 +107,11 @@ export function calculateStatsForTurn(
   options?: { freezeMilitary?: boolean },
 ): CivResources {
   const res   = parseCivResources(civ.resources as Record<string, unknown>)
-  const techs    = new Set(civ.techs    ?? [])
+  const techs = new Set(civ.techs    ?? [])
   const policies = new Set(civ.policies ?? [])
   const m = settings.resourceMultiplier
+
+  const tBonus = sumTechEconomyBonuses(techs)
 
   // ── 1. Terrain-based production ─────────────────────────────────────────
   let foodProd = 0, timberProd = 0, goldProd = 0, stoneProd = 0, wealthProd = 0
@@ -96,39 +129,35 @@ export function calculateStatsForTurn(
         case 'river':    foodProd   += 1; wealthProd += 1; break
         default: break
       }
+
       // Bonus from hex resource node
       if (c.resource === 'wheat') foodProd   += 1
       if (c.resource === 'wood')  timberProd += 1
       if (c.resource === 'stone') stoneProd  += 1
       if (c.resource === 'gold')  goldProd   += 2
       if (c.resource === 'fish')  foodProd   += 1
+
+      if (c.terrain === 'coast') {
+        foodProd += tBonus.coastFoodBonus
+        wealthProd += tBonus.coastWealthBonus
+      }
     }
     Object.assign(res, deriveLuxuries(ownedCells))
   }
 
-  // ── 2. Tech flat bonuses ────────────────────────────────────────────────
-  let techFoodBonus = 0, techTimberBonus = 0, techStoneBonus = 0
-  let techKnowBonus = 0, techMilBonus = 0
-  for (const tech of techs) {
-    const b = TECH_BONUSES[tech]
-    if (!b) continue
-    techFoodBonus   += b.food     ?? 0
-    techTimberBonus += b.timber   ?? 0
-    techStoneBonus  += b.stone    ?? 0
-    techKnowBonus   += b.knowledge ?? 0
-    techMilBonus    += b.military  ?? 0
-  }
-  foodProd   += techFoodBonus
-  timberProd += techTimberBonus
-  stoneProd  += techStoneBonus
+  foodProd   += tBonus.foodFlat
+  timberProd += tBonus.timberFlat
+  stoneProd  += tBonus.stoneFlat
 
-  // ── 3. Accumulate trade resources ───────────────────────────────────────
-  res.food   += Math.round(foodProd   * m)
+  // ── Accumulate trade resources + derived wealth ──────────────────────────
+  res.food   += Math.round(foodProd * m)
   res.timber += Math.round(timberProd * m)
-  res.gold   += Math.round(goldProd   * m)
-  res.stone  += Math.round(stoneProd  * m)
+  res.stone  += Math.round(stoneProd * m)
 
-  // ── 4. Policy multipliers ───────────────────────────────────────────────
+  const techKnowBonus = tBonus.knowledgeFlat
+  const techMilBonus  = tBonus.militaryFlat
+
+  // ── Policy multipliers ───────────────────────────────────────────────────
   let wealthMult = 1, militaryMult = 1, knowledgeMult = 1, foodMult = 1
   for (const policy of policies) {
     const pm = POLICY_MULTIPLIERS[policy]
@@ -139,12 +168,11 @@ export function calculateStatsForTurn(
     if (pm.food)      foodMult      *= pm.food
   }
 
-  // ── 5. Derive core stats ────────────────────────────────────────────────
+  res.gold += Math.round((goldProd + tBonus.goldFlat) * m)
+  res.wealth = Math.round(
+    (res.wealth + (wealthProd + goldProd + tBonus.wealthFlat) * m) * wealthMult,
+  )
 
-  // Wealth accumulates from coast/gold terrain and policy multipliers
-  res.wealth = Math.round((res.wealth + (wealthProd + goldProd) * m) * wealthMult)
-
-  // Population grows with food surplus; shrinks on severe shortage
   const foodDemand  = Math.ceil(res.population * 0.05)
   const foodSurplus = res.food - foodDemand
   res.food = Math.max(0, res.food - foodDemand)
@@ -155,18 +183,18 @@ export function calculateStatsForTurn(
     res.population = Math.max(10, res.population + foodSurplus)
   }
 
-  // Military is capped by gold reserves + iron access, then tech/policy modified
+  // Military capped by treasury + forging tradition
   if (!options?.freezeMilitary) {
     const goldPerSoldier = Math.max(1, settings.militaryMaintenance)
     const milFromGold = Math.floor(res.gold / goldPerSoldier)
-    const milCap = (res.iron ? milFromGold * 2 : milFromGold) + techMilBonus
+    const ironForge = Boolean(res.iron || hasIronIndustryKnowledge(techs))
+    const milCap = (ironForge ? milFromGold * 2 : milFromGold) + techMilBonus
     const targetMil = Math.round(milCap * militaryMult)
     res.military = Math.max(0, Math.min(res.military + 5, targetMil))
   }
 
-  // Knowledge grows each turn proportional to tech count × rate
   res.knowledge = Math.round(
-    res.knowledge + (techs.size * settings.knowledgeRate + techKnowBonus) * knowledgeMult
+    res.knowledge + (techs.size * settings.knowledgeRate + techKnowBonus) * knowledgeMult,
   )
 
   return res

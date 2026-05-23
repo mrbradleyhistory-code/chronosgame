@@ -2,6 +2,7 @@
 
 export type QueueActionType =
   | 'EXPAND'
+  | 'EXPLORE'
   | 'ATTACK'
   | 'TRADE'
   | 'RESEARCH'
@@ -11,6 +12,11 @@ export type QueueActionType =
 export type QueueReviewStatus = 'draft' | 'submitted' | 'approved' | 'rejected' | 'modified'
 
 export interface ExpandPayload {
+  q: number
+  r: number
+}
+
+export interface ExplorePayload {
   q: number
   r: number
 }
@@ -44,6 +50,7 @@ export interface EnactPolicyPayload {
 
 export type ActionPayload =
   | ExpandPayload
+  | ExplorePayload
   | AttackPayload
   | TradePayload
   | ResearchPayload
