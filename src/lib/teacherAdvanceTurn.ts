@@ -83,6 +83,7 @@ export async function advanceGameTurnTeacher(
     settingsUnknown: gameRow.settings,
     queueRows,
     turnNumberBeingResolved: turnNow,
+    gameId,
   })
 
   for (const civ of civilizations) {
@@ -96,6 +97,7 @@ export async function advanceGameTurnTeacher(
     resolved_turn: turnNow,
     action_outcomes: artefact.events,
     slot_audits: artefact.turnEventsJson,
+    combat_log: artefact.combatLog,
   }
 
   const { error: tErr } = await supabase.from('turns').insert({

@@ -7,6 +7,7 @@ import { MapCanvas } from '../components/MapCanvas'
 import { StatPanel } from '../components/StatPanel'
 import { ResourceBar } from '../components/ResourceBar'
 import { ActionQueuePanel } from '../components/ActionQueuePanel'
+import { CombatLog } from '../components/CombatLog'
 
 interface PeerBrief {
   id: string
@@ -120,6 +121,7 @@ export default function StudentPage() {
         {/* Right sidebar: game panels */}
         <aside className="w-80 shrink-0 overflow-y-auto border-l border-slate-700 p-4 space-y-4 bg-slate-950/70">
           <StatPanel resources={civ.resources as Record<string, unknown>} />
+          <CombatLog gameId={civ.game_id} civId={civ.id} />
 
           {play && (
             <ActionQueuePanel

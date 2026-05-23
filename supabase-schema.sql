@@ -343,3 +343,9 @@ end;
 $$;
 
 grant execute on function public.create_civ_with_pin(uuid, text, text, text) to authenticated;
+
+-- ------------------------------------------------------------
+-- Realtime (optional): expose `turns` to Postgres replication so INSERT
+-- events reach the projector battle strip / student Chronicle without polling.
+--
+-- ALTER PUBLICATION supabase_realtime ADD TABLE public.turns;

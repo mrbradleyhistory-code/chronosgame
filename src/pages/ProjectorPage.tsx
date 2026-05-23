@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import { MapCanvas } from '../components/MapCanvas'
+import { ProjectorCombatBanner } from '../components/ProjectorCombatBanner'
 
 export default function ProjectorPage() {
   const [gameId, setGameId] = useState<string | null>(null)
@@ -24,6 +25,25 @@ export default function ProjectorPage() {
       })
   }, [])
 
+  useEffect(() => {
+    if (!gameId) return undefined
+    const channel = supabase
+      .channel(`projector-game-${gameId}`)
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'games', filter: `id=eq.${gameId}` },
+        (payload) => {
+          const t = (payload.new as { current_turn?: number }).current_turn
+          if (typeof t === 'number') setTurn(t)
+        },
+      )
+      .subscribe()
+
+    return () => {
+      void supabase.removeChannel(channel)
+    }
+  }, [gameId])
+
   const century = turn === 1 ? '3000 BCE' : `${3000 - (turn - 1) * 100} BCE`
 
   return (
@@ -37,7 +57,9 @@ export default function ProjectorPage() {
         </span>
       </header>
 
-      <main className="flex flex-1 overflow-hidden">
+      {gameId ? <ProjectorCombatBanner gameId={gameId} /> : null}
+
+      <main className="flex flex-1 overflow-hidden min-h-0">
         {gameId ? (
           <MapCanvas viewMode="projector" gameId={gameId} />
         ) : (

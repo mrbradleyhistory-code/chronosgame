@@ -1,6 +1,8 @@
 import type { Civilization } from '../contexts/StudentContext'
-import type { HexMapData, HexCell, TerrainType } from './hexUtils'
+import type { HexMapData, HexCell } from './hexUtils'
 import { getCellAt, oddRNeighbors, isAdjacentToCivOwnership } from './hexUtils'
+import type { CombatLogEntry } from '../types/combat'
+import { resolveCombatDiceBattle } from './combatResolution'
 import { calculateStatsForTurn, parseCivResources } from './statsCalc'
 import type { CivResources, GameSettings } from '../types/resources'
 import { parseGameSettings, serializeCivResources } from '../types/resources'
@@ -38,6 +40,7 @@ export interface ResolvedTurnArtifacts {
   civilizationPatches: Record<string, Record<string, unknown>>
   events: ActionOutcome[]
   turnEventsJson: unknown[]
+  combatLog: CombatLogEntry[]
 }
 
 type MutableSnapshot = {
@@ -131,20 +134,6 @@ export function effectiveQueuedPayload(slot: Pick<TurnActionSlotRow, 'payload' |
   return slot.payload ?? {}
 }
 
-function defenderTerrainFactor(terrain: TerrainType): number {
-  switch (terrain) {
-    case 'forest':
-    case 'jungle':
-      return 1.12
-    case 'hills':
-      return 1.18
-    case 'mountain':
-      return 1.35
-    default:
-      return 1
-  }
-}
-
 function snapshotMutable(civRow: Civilization): MutableSnapshot {
   return {
     id: civRow.id,
@@ -162,6 +151,7 @@ function ownedTilesCount(map: HexMapData, civId: string): number {
 
 /** Advance hex map ownership + queued actions, then regenerate economy snapshots for Supabase PATCH rows */
 export function resolveTurnForGame(args: {
+  gameId: string
   map: HexMapData
   civilizationRows: Civilization[]
   settingsUnknown: unknown
@@ -171,6 +161,7 @@ export function resolveTurnForGame(args: {
   const settings = parseGameSettings(args.settingsUnknown)
   let map: HexMapData = { cols: args.map.cols, rows: args.map.rows, cells: cloneDeepCells(args.map.cells) }
   const events: ActionOutcome[] = []
+  const combatLog: CombatLogEntry[] = []
 
   const snap = new Map<string, MutableSnapshot>()
   for (const c of args.civilizationRows) {
@@ -417,37 +408,45 @@ export function resolveTurnForGame(args: {
       return
     }
 
-    const atkMil = attackerSnap.resources.military
-    const defMil = defenderSnap.resources.military
-    const defEff = Math.max(1, defMil * defenderTerrainFactor(cell.terrain))
+    const outcome = resolveCombatDiceBattle({
+      gameId: args.gameId,
+      turnNumber: args.turnNumberBeingResolved,
+      slotRowId: row.id,
+      attackerCivId: row.civ_id,
+      defenderCivId: defenderSnap.id,
+      attackerName: attackerSnap.group_name,
+      defenderName: defenderSnap.group_name,
+      q,
+      r,
+      defenderTerrain: cell.terrain,
+      attackerMilitaryBase: attackerSnap.resources.military,
+      defenderMilitaryBase: defenderSnap.resources.military,
+      map,
+      attackerSnapPop: attackerSnap.resources.population,
+      defenderSnapPop: defenderSnap.resources.population,
+    })
 
-    if (atkMil <= defEff) {
-      defenderSnap.resources = {
-        ...defenderSnap.resources,
-        military: Math.max(3, Math.floor(defMil - atkMil * 0.05)),
-      }
-      attackerSnap.resources = {
-        ...attackerSnap.resources,
-        military: Math.max(0, Math.floor(atkMil * 0.65)),
-      }
-      pushEvt(row, 'failed', `${defenderSnap.group_name}'s armies held fast at (${q},${r})`, {
-        terrain: cell.terrain,
-      })
+    combatLog.push(outcome.entry)
+
+    attackerSnap.resources = {
+      ...attackerSnap.resources,
+      military: outcome.attackerMilAfterLoss,
+      population: outcome.attackerPopAfterLoss,
+    }
+    defenderSnap.resources = {
+      ...defenderSnap.resources,
+      military: outcome.defenderMilAfterLoss,
+      population: outcome.defenderPopAfterLoss,
+    }
+
+    if (outcome.attackerWinsHex) {
+      cell.owner = row.civ_id
+      revealAround(map, row.civ_id, q, r)
+      pushEvt(row, 'ok', outcome.entry.narrative, { combat: outcome.entry })
       return
     }
 
-    defenderSnap.resources = {
-      ...defenderSnap.resources,
-      military: Math.max(3, Math.floor(defMil * 0.6)),
-      population: Math.max(10, defenderSnap.resources.population - Math.floor(atkMil * 0.08)),
-    }
-    attackerSnap.resources = {
-      ...attackerSnap.resources,
-      military: Math.max(0, Math.floor(atkMil - defMil * 0.18)),
-    }
-    cell.owner = row.civ_id
-    revealAround(map, row.civ_id, q, r)
-    pushEvt(row, 'ok', `Triumph at (${q},${r})`, { formerOwnerId: defenderSnap.id })
+    pushEvt(row, 'failed', outcome.entry.narrative, { combat: outcome.entry })
   }
 
   for (const row of sortedSlots) {
@@ -519,5 +518,5 @@ export function resolveTurnForGame(args: {
     outcomes: events.filter((e) => e.civId === r.civ_id && e.slotIndex === r.slot_index),
   }))
 
-  return { map, civilizationPatches, events, turnEventsJson }
+  return { map, civilizationPatches, events, turnEventsJson, combatLog }
 }
