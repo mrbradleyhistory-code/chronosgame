@@ -246,3 +246,201 @@
   opacity: 0.45;
   cursor: not-allowed;
 }
+
+/* ============================================================
+   STAT PANEL — parchment 2×2 core-stats card
+   ============================================================ */
+
+.stat-panel {
+  background-color: #f4e4c1;
+  background-image:
+    radial-gradient(ellipse at 10% 10%, rgba(180, 130, 70, 0.2) 0%, transparent 50%),
+    radial-gradient(ellipse at 90% 90%, rgba(150, 100, 40, 0.15) 0%, transparent 50%),
+    linear-gradient(170deg, #f7ecce 0%, #eed9a2 50%, #e6cc90 100%);
+  border: 2px solid #7a4e1e;
+  border-radius: 2px;
+  box-shadow:
+    0 0 0 1px #c8a96e,
+    0 0 0 4px #7a4e1e,
+    0 0 0 5px #c8a96e,
+    4px 6px 18px rgba(15, 7, 2, 0.55);
+  overflow: hidden;
+}
+
+.stat-panel-heading {
+  font-family: 'Cinzel', serif;
+  font-size: 0.6rem;
+  font-weight: 700;
+  color: #f4e4c1;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  white-space: nowrap;
+}
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0;
+}
+
+.stat-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 0.75rem 0.5rem 0.65rem;
+  border-right: 1px solid rgba(122, 78, 30, 0.25);
+  border-bottom: 1px solid rgba(122, 78, 30, 0.25);
+  gap: 0.2rem;
+  transition: background 0.15s;
+}
+
+.stat-cell:nth-child(even) {
+  border-right: none;
+}
+
+.stat-cell:nth-child(n+3) {
+  border-bottom: none;
+}
+
+.stat-cell:hover {
+  background: rgba(122, 78, 30, 0.06);
+}
+
+.stat-icon-wrap {
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.85;
+}
+
+.stat-icon-wrap svg {
+  width: 100%;
+  height: 100%;
+}
+
+.stat-label {
+  font-family: 'Cinzel', serif;
+  font-size: 0.52rem;
+  font-weight: 600;
+  color: #8b5a2b;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  margin-top: 0.05rem;
+}
+
+.stat-value {
+  font-family: 'Cinzel', serif;
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 1;
+  margin-top: 0.1rem;
+}
+
+/* ============================================================
+   RESOURCE BAR — compact header strip for trade + luxuries
+   ============================================================ */
+
+.resource-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.4rem 1.5rem;
+  background:
+    linear-gradient(180deg, #1e1208 0%, #150d05 100%);
+  border-bottom: 1px solid #3d1f09;
+  box-shadow: inset 0 1px 0 rgba(200, 169, 110, 0.12);
+  min-height: 36px;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.res-trade-group {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.res-trade-item {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.2rem 0.55rem;
+  background: rgba(244, 228, 193, 0.07);
+  border: 1px solid rgba(200, 169, 110, 0.2);
+  border-radius: 2px;
+  cursor: default;
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.res-trade-item:hover {
+  background: rgba(244, 228, 193, 0.13);
+  border-color: rgba(200, 169, 110, 0.4);
+}
+
+.res-trade-icon {
+  color: #c8a96e;
+  display: flex;
+  align-items: center;
+  width: 14px;
+  height: 14px;
+}
+
+.res-trade-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.res-trade-value {
+  font-family: 'Cinzel', serif;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: #e8d5a0;
+  letter-spacing: 0.04em;
+  min-width: 1.6ch;
+  text-align: right;
+}
+
+.res-bar-divider {
+  color: #3d2510;
+  font-size: 0.6rem;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.res-lux-group {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  flex-wrap: wrap;
+}
+
+.res-lux-badge {
+  font-family: 'Cinzel', serif;
+  font-size: 0.58rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 0.15rem 0.4rem;
+  border-radius: 2px;
+  border: 1px solid;
+  white-space: nowrap;
+  cursor: default;
+  transition: opacity 0.15s;
+}
+
+.res-lux-owned {
+  color: #1a0e07;
+  background: linear-gradient(135deg, #e8c76a, #c8a030);
+  border-color: #a07820;
+  box-shadow: 0 0 6px rgba(200, 160, 48, 0.35);
+}
+
+.res-lux-absent {
+  color: #4a3018;
+  background: transparent;
+  border-color: #3d1f09;
+  opacity: 0.45;
+}

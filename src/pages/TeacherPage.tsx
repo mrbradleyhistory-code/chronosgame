@@ -2,6 +2,7 @@ import { useState, useCallback } from 'react'
 import { useAuth } from '../contexts/AuthContext'
 import { CivManager } from '../components/CivManager'
 import { MapCanvas } from '../components/MapCanvas'
+import { TeacherTurnConsole } from '../components/TeacherTurnConsole'
 import { supabase } from '../lib/supabase'
 import { generateMap, randomSeed } from '../lib/mapGen'
 import { MAP_SIZE_OPTIONS } from '../lib/hexUtils'
@@ -110,6 +111,8 @@ export default function TeacherPage() {
             <h2 className="mb-3 text-sm font-semibold text-slate-300 uppercase tracking-wide">Civilizations &amp; PINs</h2>
             <CivManager onGameSelect={handleGameSelect} />
           </div>
+
+          {activeGameId && <TeacherTurnConsole gameId={activeGameId} />}
 
           {activeGameId && (
             <div className="rounded-xl border border-slate-700 bg-slate-800 p-4 space-y-3">

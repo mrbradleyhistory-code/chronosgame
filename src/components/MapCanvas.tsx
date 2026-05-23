@@ -30,6 +30,8 @@ export interface MapCanvasProps {
   previewMap?: HexMapData | null
   // Called after map is fetched/generated so teacher can inspect it
   onMapLoaded?: (map: HexMapData) => void
+  /** Invoked whenever a learner selects a explored hex tile (for decree targeting). */
+  onStudentHexPick?: (cell: HexCell) => void
 }
 
 // ─── terrain sprite renderers ─────────────────────────────────────────────────
@@ -278,7 +280,7 @@ function drawMap(
 
 // ─── component ────────────────────────────────────────────────────────────────
 
-export function MapCanvas({ viewMode, gameId, civId, previewMap, onMapLoaded }: MapCanvasProps) {
+export function MapCanvas({ viewMode, gameId, civId, previewMap, onMapLoaded, onStudentHexPick }: MapCanvasProps) {
   const canvasRef    = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
 
@@ -288,6 +290,7 @@ export function MapCanvas({ viewMode, gameId, civId, previewMap, onMapLoaded }: 
   const selectedRef  = useRef<{ q: number; r: number } | null>(null)
   const viewModeRef  = useRef(viewMode)
   const civIdRef     = useRef(civId)
+  const hexPickRef   = useRef(onStudentHexPick)
   const rafRef       = useRef(0)
   const isDragging   = useRef(false)
   const dragStart    = useRef({ x: 0, y: 0, tx: 0, ty: 0 })
@@ -299,6 +302,7 @@ export function MapCanvas({ viewMode, gameId, civId, previewMap, onMapLoaded }: 
 
   useEffect(() => { viewModeRef.current = viewMode }, [viewMode])
   useEffect(() => { civIdRef.current    = civId    }, [civId])
+  useEffect(() => { hexPickRef.current = onStudentHexPick }, [onStudentHexPick])
 
   // ── render ──
   const redraw = useCallback(() => {
@@ -455,6 +459,9 @@ export function MapCanvas({ viewMode, gameId, civId, previewMap, onMapLoaded }: 
 
       selectedRef.current = { q, r }
       const isVisible = viewModeRef.current !== 'student' || cell.explored_by.includes(civIdRef.current ?? '')
+      if (viewModeRef.current === 'student' && isVisible) {
+        hexPickRef.current?.(cell)
+      }
       const civ = civsRef.current.find(c => c.id === cell.owner)
       const container = containerRef.current
       setTooltip(isVisible ? {

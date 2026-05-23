@@ -152,3 +152,47 @@ export function parseHexMapData(raw: unknown): HexMapData | null {
   }
   return null
 }
+
+// ─── Offset odd‑r neighbours (parity deltas copied from procedural map generator) ─
+
+/** Six adjacent coords; pass `cols`/`rows` to clamp inside the map rectangle. */
+export function oddRNeighbors(
+  q: number,
+  r: number,
+  cols?: number,
+  rows?: number,
+): { q: number; r: number }[] {
+  const parity = r & 1
+  const dirs: [number, number][] =
+    parity === 0
+      ? [[1, 0], [0, -1], [-1, -1], [-1, 0], [-1, 1], [0, 1]]
+      : [[1, 0], [1, -1], [0, -1], [-1, 0], [0, 1], [1, 1]]
+  const out = dirs.map(([dq, dr]) => ({ q: q + dq, r: r + dr }))
+  if (cols !== undefined && rows !== undefined) {
+    return out.filter(({ q: nq, r: nr }) => nq >= 0 && nq < cols && nr >= 0 && nr < rows)
+  }
+  return out
+}
+
+export function getCellAt(map: HexMapData, q: number, r: number): HexCell | undefined {
+  if (q < 0 || r < 0 || q >= map.cols || r >= map.rows) return undefined
+  return map.cells[r * map.cols + q]
+}
+
+export function hexKey(q: number, r: number) {
+  return `${q},${r}`
+}
+
+/** True if hex (tq, tr) is horizontally adjacent to any hex owned by `civId`. */
+export function isAdjacentToCivOwnership(
+  map: HexMapData,
+  civId: string,
+  tq: number,
+  tr: number,
+): boolean {
+  for (const { q, r } of oddRNeighbors(tq, tr, map.cols, map.rows)) {
+    const c = getCellAt(map, q, r)
+    if (c && c.owner === civId) return true
+  }
+  return false
+}
