@@ -1,3 +1,12 @@
+-- =============================================================================
+-- REPO FILE: supabase-schema.sql
+--
+-- Supabase’s editor titles this snippet however you saved it — use REPO FILE
+-- above to match the file on disk. Run order: see SUPABASE-MIGRATIONS.md
+-- LABEL IN YOUR WORKSPACE: Chronos — 01 base schema + RLS + PIN RPCs
+-- Requires: hosted Supabase with Auth enabled (games.teacher_id -> auth.users)
+-- =============================================================================
+
 -- ============================================================
 -- Chronos Game — Supabase Schema
 -- Run this in the Supabase SQL editor (Dashboard → SQL Editor)
@@ -234,6 +243,9 @@ create extension if not exists pgcrypto;
 -- DEFINER. Returns the matching civ row (excluding pin_hash) or
 -- nothing if the username/PIN pair is wrong.
 -- ------------------------------------------------------------
+-- PG 42P13 if an older install used different parameter names — drop first.
+drop function if exists public.verify_student_pin(text, text);
+
 create or replace function public.verify_student_pin(
   p_username text,
   p_raw_pin  text
@@ -349,3 +361,7 @@ grant execute on function public.create_civ_with_pin(uuid, text, text, text) to 
 -- events reach the projector battle strip / student Chronicle without polling.
 --
 -- ALTER PUBLICATION supabase_realtime ADD TABLE public.turns;
+--
+-- Teacher Century tribunal live refresh (`TeacherTurnConsole`):
+-- ALTER PUBLICATION supabase_realtime ADD TABLE public.turn_action_slots;
+-- ALTER PUBLICATION supabase_realtime ADD TABLE public.games;

@@ -1,9 +1,28 @@
+-- =============================================================================
+-- REPO FILE: supabase-turn-engine.sql
+--
+-- LABEL IN YOUR WORKSPACE: Chronos — 04 turn queues + BUILD + teacher RPCs
+-- Run AFTER: supabase-schema.sql, supabase-add-hex-map.sql, supabase-pins.sql
+-- Full reset / order: SUPABASE-MIGRATIONS.md
+--
+-- Enable Realtime (Dashboard → Database → Replication) for public.games (+ others
+-- as noted at bottom of schema file).
+-- =============================================================================
+
 -- ============================================================
 -- Chronos — turn planning queues + student play RPCs + buildings
 -- Run in Supabase SQL Editor after base schema / pins migrations.
 -- Enable Realtime (Dashboard → Database → Replication) for:
 --   public.games
 -- ============================================================
+
+-- PostgreSQL 42P13: CREATE OR REPLACE cannot rename parameter identifiers.
+-- Run this whole file from the top. If you only paste a fragment, execute this
+-- block once first:
+--   drop function if exists public.verify_student_pin(text, text);
+drop function if exists public.verify_student_pin(text, text);
+drop function if exists public.get_student_play_state(text, text);
+drop function if exists public.submit_turn_queue(text, text, jsonb);
 
 -- Buildings placed via BUILD actions (persisted JSON array)
 alter table public.civilizations
@@ -95,7 +114,7 @@ begin
     from public.civilizations c
     join public.games g on g.id = c.game_id
     where c.username = p_username
-      and g.status = 'active'
+      and g.status in ('active', 'paused', 'review')
       and c.pin_hash = crypt(p_raw_pin, c.pin_hash);
 end;
 $$;
@@ -123,7 +142,7 @@ begin
   from public.civilizations c
   join public.games g on g.id = c.game_id
   where c.username = lower(trim(p_username))
-    and g.status in ('active','paused')
+    and g.status in ('active','paused','review')
     and c.pin_hash = crypt(p_raw_pin, c.pin_hash);
 
   if row is null then
@@ -210,11 +229,13 @@ begin
     raise exception 'invalid_slots' using hint = 'max_three';
   end if;
 
+  -- Align with get_student_play_state — students may seal decrees whenever they can hydrate
+  -- (Teacher "End Session" sets paused; drafts must still queue for tribunal after class.)
   select c.* into v_civ
   from public.civilizations c
   join public.games g on g.id = c.game_id
   where c.username = lower(trim(p_username))
-    and g.status = 'active'
+    and g.status in ('active', 'paused', 'review')
     and c.pin_hash = crypt(p_raw_pin, c.pin_hash);
 
   if v_civ is null then
@@ -269,3 +290,63 @@ alter table public.turn_action_slots add constraint turn_action_slots_action_typ
   check (action_type in (
     'EXPAND','EXPLORE','ATTACK','TRADE','RESEARCH','BUILD','ENACT_POLICY'
   ));
+
+-- ------------------------------------------------------------
+-- Teacher tribunal: security-definer review RPC
+-- Bypasses turn_action_slots RLS so rulings persist reliably when
+-- the teacher JWT is valid (REST updates can silently affect 0 rows).
+-- See also supabase-teacher-review.sql (same definition).
+-- ------------------------------------------------------------
+drop function if exists public.teacher_review_slot(uuid, text, jsonb);
+
+create or replace function public.teacher_review_slot(
+  p_slot_id          uuid,
+  p_status           text,
+  p_reviewed_payload jsonb default null
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, extensions
+as $$
+declare
+  v_game_id uuid;
+begin
+  select game_id into v_game_id
+  from public.turn_action_slots
+  where id = p_slot_id;
+
+  if v_game_id is null then
+    return jsonb_build_object('ok', false, 'error', 'slot_not_found');
+  end if;
+
+  if not exists (
+    select 1 from public.games
+    where id = v_game_id
+      and teacher_id = auth.uid()
+  ) then
+    return jsonb_build_object('ok', false, 'error', 'unauthorized');
+  end if;
+
+  if p_status not in ('draft', 'submitted', 'approved', 'rejected', 'modified') then
+    return jsonb_build_object('ok', false, 'error', 'invalid_status');
+  end if;
+
+  update public.turn_action_slots
+  set
+    review_status    = p_status,
+    reviewed_payload = case
+                         when p_reviewed_payload is not null then p_reviewed_payload
+                         else reviewed_payload
+                       end
+  where id = p_slot_id;
+
+  return jsonb_build_object(
+    'ok',      true,
+    'slot_id', p_slot_id,
+    'status',  p_status
+  );
+end;
+$$;
+
+grant execute on function public.teacher_review_slot(uuid, text, jsonb) to authenticated;

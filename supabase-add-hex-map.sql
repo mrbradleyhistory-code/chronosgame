@@ -1,3 +1,10 @@
+-- =============================================================================
+-- REPO FILE: supabase-add-hex-map.sql
+--
+-- LABEL IN YOUR WORKSPACE: Chronos — 02 games.hex_map
+-- Run AFTER: supabase-schema.sql   BEFORE: pins, turn-engine
+-- =============================================================================
+
 -- Add hex_map column to games table
 -- Run in Supabase SQL Editor → Dashboard → SQL Editor
 

@@ -1,3 +1,11 @@
+-- =============================================================================
+-- REPO FILE: supabase-pins.sql
+--
+-- LABEL IN YOUR WORKSPACE: Chronos — 03 PIN functions + games status check
+-- Run AFTER: supabase-schema.sql (+ add-hex-map if you use maps)
+-- BEFORE: supabase-turn-engine.sql
+-- =============================================================================
+
 -- Run this any time to install or reinstall the PIN management functions.
 -- Safe to re-run — uses CREATE OR REPLACE and IF NOT EXISTS.
 
@@ -7,6 +15,9 @@ alter table public.games add constraint games_status_check
   check (status in ('lobby', 'active', 'paused', 'review', 'ended'));
 
 create extension if not exists pgcrypto;
+
+-- PG 42P13 if DB had older parameter names — safe to repeat.
+drop function if exists public.verify_student_pin(text, text);
 
 -- verify_student_pin: called by unauthenticated students
 create or replace function public.verify_student_pin(

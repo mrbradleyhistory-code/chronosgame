@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
+import { coerceGameTurn } from '../lib/coerceTurn'
 import { MapCanvas } from '../components/MapCanvas'
 import { ProjectorCombatBanner } from '../components/ProjectorCombatBanner'
 
@@ -12,7 +13,7 @@ export default function ProjectorPage() {
     supabase
       .from('games')
       .select('id, name, current_turn')
-      .in('status', ['active', 'paused'])
+      .in('status', ['active', 'paused', 'review'])
       .order('created_at', { ascending: false })
       .limit(1)
       .single()
@@ -20,7 +21,7 @@ export default function ProjectorPage() {
         if (data) {
           setGameId(data.id)
           setGameName(data.name)
-          setTurn(data.current_turn)
+          setTurn(coerceGameTurn(data.current_turn))
         }
       })
   }, [])
@@ -33,8 +34,8 @@ export default function ProjectorPage() {
         'postgres_changes',
         { event: 'UPDATE', schema: 'public', table: 'games', filter: `id=eq.${gameId}` },
         (payload) => {
-          const t = (payload.new as { current_turn?: number }).current_turn
-          if (typeof t === 'number') setTurn(t)
+          const t = coerceGameTurn((payload.new as { current_turn?: unknown }).current_turn)
+          setTurn(t)
         },
       )
       .subscribe()

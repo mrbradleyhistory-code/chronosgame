@@ -3,6 +3,7 @@ import type { HexMapData } from './hexUtils'
 import { parseHexMapData } from './hexUtils'
 import type { Civilization } from '../contexts/StudentContext'
 import type { TurnActionSlotRow } from '../types/actions'
+import { coerceGameTurn } from './coerceTurn'
 import { resolveTurnForGame } from './turnEngine'
 
 function rowToCivilization(row: Record<string, unknown>): Civilization {
@@ -36,7 +37,7 @@ export async function advanceGameTurnTeacher(
 
   if (gErr || !gameRow) return { detail: gErr?.message ?? 'Unable to reach game parchment.' }
 
-  const turnNow = typeof gameRow.current_turn === 'number' ? gameRow.current_turn : 1
+  const turnNow = coerceGameTurn(gameRow.current_turn)
   const map = parseHexMapData(gameRow.hex_map as unknown)
   if (!map) return { detail: 'Lock a world atlas (hex_map) before advancing centuries.' }
 
@@ -72,6 +73,26 @@ export async function advanceGameTurnTeacher(
 
   const unresolved = queueRows.filter((row) => row.review_status === 'submitted')
   if (unresolved.length) {
+    // #region agent log
+    void fetch('http://127.0.0.1:7417/ingest/1c6c16d3-97bb-4ef5-b18a-32d8ab1e4cbd', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'd8d7f0' },
+      body: JSON.stringify({
+        sessionId: 'd8d7f0',
+        runId: 'pre-fix',
+        hypothesisId: 'D',
+        location: 'teacherAdvanceTurn.ts:unresolved',
+        message: 'advance blocked: submitted slots remain',
+        data: {
+          gameIdTail: gameId.slice(-8),
+          turnNow,
+          unresolvedCount: unresolved.length,
+          queueTotal: queueRows.length,
+        },
+        timestamp: Date.now(),
+      }),
+    }).catch(() => {})
+    // #endregion
     return {
       detail: `Still awaiting magistrate rulings — ${unresolved.length} decree(s) have not been judged.`,
     }

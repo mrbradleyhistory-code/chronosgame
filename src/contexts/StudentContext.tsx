@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react'
 import type { ReactNode } from 'react'
 import { supabase } from '../lib/supabase'
+import { coerceGameTurn } from '../lib/coerceTurn'
 import type { TurnActionSlotRow } from '../types/actions'
 
 const STORAGE_KEY = 'chronos_student_civ'
@@ -130,7 +131,7 @@ export function StudentProvider({ children }: { children: ReactNode }) {
       queue,
       game: {
         id: g.id as string,
-        current_turn: typeof g.current_turn === 'number' ? g.current_turn : 1,
+        current_turn: coerceGameTurn(g.current_turn),
         status: typeof g.status === 'string' ? g.status : 'paused',
         settings: g.settings ?? {},
       },
@@ -196,7 +197,33 @@ export function StudentProvider({ children }: { children: ReactNode }) {
         p_slots: slots,
       })
 
-      return error?.message ?? null
+      if (!error) return null
+
+      const line = [error.message, error.details, error.hint].filter(
+        (x): x is string => typeof x === 'string' && x.trim().length > 0,
+      ).join(' — ')
+
+      // #region agent log
+      try {
+        sessionStorage.setItem(
+          'chronos_debug_submit',
+          JSON.stringify({
+            sessionId: 'd8d7f0',
+            runId: 'post-fix-5',
+            ts: Date.now(),
+            hypothesisId: 'submit-paused',
+            message: line,
+            code: error.code ?? null,
+            details: error.details ?? null,
+            hint: error.hint ?? null,
+          }),
+        )
+      } catch {
+        /* ignore */
+      }
+      // #endregion
+
+      return line.length > 0 ? line : 'Could not seal treaty scroll (RPC error — see chronos_debug_submit in Session Storage).'
     },
     [],
   )

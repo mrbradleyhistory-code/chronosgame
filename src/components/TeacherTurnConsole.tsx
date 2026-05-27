@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import type { PostgrestError } from '@supabase/supabase-js'
 import { supabase } from '../lib/supabase'
 import { advanceGameTurnTeacher } from '../lib/teacherAdvanceTurn'
+import { coerceGameTurn } from '../lib/coerceTurn'
 import type { TurnActionSlotRow } from '../types/actions'
 
 interface TeacherTurnConsoleProps {
@@ -16,6 +18,47 @@ interface QueueRow extends TurnActionSlotRow {
   civilization?: CivBrief | null
 }
 
+type TeacherReviewRpcEnvelope = { ok?: boolean; error?: string; status?: string }
+
+function coerceTeacherReviewRpcResult(raw: unknown): TeacherReviewRpcEnvelope | null {
+  if (raw === null || raw === undefined) return null
+  if (typeof raw === 'string') {
+    try {
+      return coerceTeacherReviewRpcResult(JSON.parse(raw) as unknown)
+    } catch {
+      return null
+    }
+  }
+  if (typeof raw === 'object' && !Array.isArray(raw)) {
+    const o = raw as Record<string, unknown>
+    const okRaw = o.ok
+    const ok =
+      okRaw === true || okRaw === 'true'
+        ? true
+        : okRaw === false || okRaw === 'false'
+          ? false
+          : undefined
+    return {
+      ...(ok !== undefined ? { ok } : {}),
+      error: typeof o.error === 'string' ? o.error : undefined,
+      status: typeof o.status === 'string' ? o.status : undefined,
+    }
+  }
+  return null
+}
+
+function stashTribunalDebug(payload: Record<string, unknown>) {
+  try {
+    sessionStorage.setItem('chronos_debug_tribunal', JSON.stringify({ ...payload, ts: Date.now() }))
+  } catch {
+    /* ignore quota / privacy mode */
+  }
+}
+
+function flattenSupabaseError(err: PostgrestError): string {
+  return [err.message, err.details, err.hint].filter((x) => typeof x === 'string' && x.trim().length > 0).join(' — ')
+}
+
 export function TeacherTurnConsole({ gameId }: TeacherTurnConsoleProps) {
   const [slots, setSlots]                       = useState<QueueRow[]>([])
   const [turnNumber, setTurnNumber]             = useState<number | null>(null)
@@ -23,32 +66,160 @@ export function TeacherTurnConsole({ gameId }: TeacherTurnConsoleProps) {
   const [busyId, setBusyId]                     = useState<string | null>(null)
   const [advancing, setAdvancing]               = useState(false)
   const [message, setMessage]                   = useState<string | null>(null)
+  const [loadBanner, setLoadBanner]            = useState<string | null>(null)
 
   const load = useCallback(async () => {
     if (!gameId) return
     setLoading(true)
-    setMessage(null)
+    // Do not clear `message` here — setReview/handleAdvance set errors then call load(),
+    // and clearing at the start wiped tribunal feedback before paint.
 
-    const { data: game, error: gErr } = await supabase.from('games').select('current_turn').eq('id', gameId).single()
+    const { data: game, error: gErr } = await supabase.from('games').select('current_turn, status').eq('id', gameId).single()
+    const gameQueryErrText = gErr ? flattenSupabaseError(gErr) : null
     if (gErr || !game) {
       setLoading(false)
       setMessage(gErr?.message ?? 'Unable to read game calendar.')
       return
     }
-    const t = typeof game.current_turn === 'number' ? game.current_turn : 1
+    const t = coerceGameTurn(game.current_turn)
     setTurnNumber(t)
 
-    const [{ data: slotRows }, { data: civRows }] = await Promise.all([
+    const [{ data: slotRows, error: slotErr }, { data: civRows, error: civErr }] = await Promise.all([
       supabase.from('turn_action_slots').select('*').eq('game_id', gameId).eq('turn_number', t).order('civ_id'),
       supabase.from('civilizations').select('id, group_name').eq('game_id', gameId),
     ])
 
+    const slotQueryErrText = slotErr ? flattenSupabaseError(slotErr) : null
+    const civQueryErrText = civErr ? flattenSupabaseError(civErr) : null
+
     setLoading(false)
-    if (!slotRows) {
+
+    if (slotErr) {
+      const line = flattenSupabaseError(slotErr)
+      setLoadBanner(`Could not load decree scrolls: ${line}`)
       setSlots([])
+      // #region agent log
+      {
+        const dbgLoad = {
+          sessionId: 'd8d7f0',
+          runId: 'post-fix-5',
+          hypothesisId: 'C',
+          location: 'TeacherTurnConsole.tsx:load',
+          message: 'tribunal load slot query failed',
+          data: {
+            gameIdTail: gameId.slice(-8),
+            currentTurn: t,
+            gameStatus: typeof game.status === 'string' ? game.status : null,
+            slotErrFull: slotQueryErrText,
+            civErrFull: civQueryErrText,
+          },
+          timestamp: Date.now(),
+        }
+        stashTribunalDebug(dbgLoad as unknown as Record<string, unknown>)
+        void fetch('http://127.0.0.1:7417/ingest/1c6c16d3-97bb-4ef5-b18a-32d8ab1e4cbd', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'd8d7f0' },
+          body: JSON.stringify(dbgLoad),
+        }).catch(() => {})
+      }
+      // #endregion
       return
     }
 
+    const rawSlots = slotRows ?? []
+    const gameStatus = typeof game.status === 'string' ? game.status : ''
+    const playableForProbe = ['active', 'paused', 'review']
+    let probeDistinctTurns: number[] | null = null
+    let probeErrMsg: string | null = null
+
+    if (rawSlots.length === 0 && playableForProbe.includes(gameStatus)) {
+      const { data: probeRows, error: probeErr } = await supabase
+        .from('turn_action_slots')
+        .select('turn_number')
+        .eq('game_id', gameId)
+        .limit(24)
+      if (probeErr) probeErrMsg = probeErr.message
+      else {
+        probeDistinctTurns = [
+          ...new Set(
+            (probeRows ?? []).map((row) =>
+              coerceGameTurn((row as { turn_number?: unknown }).turn_number),
+            ),
+          ),
+        ].sort((a, b) => a - b)
+      }
+    }
+
+    let nextLoadBanner: string | null = null
+    if (gameStatus === 'lobby') {
+      nextLoadBanner =
+        'Chronicle dormant — this game is still in lobby. Choose Start Game so students can seal decrees for tribunal.'
+    } else if (gameStatus === 'ended') {
+      nextLoadBanner =
+        'This game has ended. Sealed parchment will not reopen for adjudication.'
+    }
+
+    if (probeErrMsg) {
+      nextLoadBanner = nextLoadBanner
+        ? `${nextLoadBanner} (Turn probe failed: ${probeErrMsg})`
+        : `Turn probe failed: ${probeErrMsg}`
+    } else if (probeDistinctTurns && probeDistinctTurns.length > 0 && !probeDistinctTurns.includes(t)) {
+      nextLoadBanner = `Calendar shows Century ${t}, but clerks filed scrolls under century ${probeDistinctTurns.join(', ')}. Inspect games.current_turn in Supabase — server queue uses the DB integer, not these labels alone.`
+    } else if (probeDistinctTurns && probeDistinctTurns.length > 1 && probeDistinctTurns.includes(t)) {
+      nextLoadBanner = `Warning: decree rows span multiple century counters (${probeDistinctTurns.join(', ')}); expected only Century ${t} while planning. Consider clearing stale slots in SQL.`
+    }
+
+    // #region agent log
+    {
+      const statuses = rawSlots.reduce<Record<string, number>>((acc, r) => {
+        const rs = typeof (r as { review_status?: string }).review_status === 'string' ? (r as { review_status: string }).review_status : '?'
+        acc[rs] = (acc[rs] ?? 0) + 1
+        return acc
+      }, {})
+      const dbgLoad = {
+        sessionId: 'd8d7f0',
+        runId: 'post-fix-5',
+        hypothesisId: 'B_turn_coerce,C,E,lobby_probe',
+        location: 'TeacherTurnConsole.tsx:load',
+        message: 'tribunal load',
+        data: {
+          gameIdTail: gameId.slice(-8),
+          gameStatus,
+          currentTurnParsed: t,
+          rawGameCurrentTurn: game.current_turn,
+          rawGameCurrentTurnType: typeof game.current_turn,
+          slotCount: rawSlots.length,
+          statusBuckets: statuses,
+          gameErrFull: gameQueryErrText,
+          slotErrFull: slotQueryErrText,
+          civErrFull: civQueryErrText,
+          slotTurnNumsSample: rawSlots.slice(0, 5).map((r) => (r as { turn_number?: number }).turn_number),
+          probeDistinctTurns,
+          probeErrMsg,
+        },
+        timestamp: Date.now(),
+      }
+      stashTribunalDebug(dbgLoad as unknown as Record<string, unknown>)
+      void fetch('http://127.0.0.1:7417/ingest/1c6c16d3-97bb-4ef5-b18a-32d8ab1e4cbd', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'd8d7f0' },
+        body: JSON.stringify(dbgLoad),
+      }).catch(() => {})
+    }
+    // #endregion
+    if (!slotRows) {
+      setSlots([])
+      setLoadBanner(nextLoadBanner)
+      return
+    }
+
+    if (civErr && rawSlots.length > 0) {
+      setLoadBanner(
+        `Loaded decrees but civilisation names failed to load: ${flattenSupabaseError(civErr)} — scrolls still show below.`,
+      )
+    } else {
+      setLoadBanner(nextLoadBanner)
+    }
     const civMap = Object.fromEntries((civRows ?? []).map((c) => [c.id, c]))
 
     setSlots(
@@ -104,17 +275,62 @@ export function TeacherTurnConsole({ gameId }: TeacherTurnConsoleProps) {
     setBusyId(rowId)
     setMessage(null)
 
-    const { error } = await supabase
-      .from('turn_action_slots')
-      .update({
-        review_status: status,
-        ...(reviewedPayload ? { reviewed_payload: reviewedPayload } : {}),
-      })
-      .eq('id', rowId)
+    // Security-definer RPC — avoids RLS silent 0-row updates on turn_action_slots (see supabase-teacher-review.sql).
+    const { data: rpcRaw, error: rpcErr } = await supabase.rpc('teacher_review_slot', {
+      p_slot_id: rowId,
+      p_status: status,
+      p_reviewed_payload: reviewedPayload ?? null,
+    })
 
     setBusyId(null)
 
-    if (error) setMessage(error.message)
+    const rpcEnvelope = coerceTeacherReviewRpcResult(rpcRaw)
+    const rpcOkResolved = rpcEnvelope?.ok === true
+
+    // #region agent log
+    const dbgRpc = {
+      sessionId: 'd8d7f0',
+      runId: 'post-fix-5',
+      hypothesisId: 'A',
+      location: 'TeacherTurnConsole.tsx:setReview',
+      message: 'tribunal teacher_review_slot RPC',
+      data: {
+        rowIdTail: rowId.slice(-8),
+        attemptedStatus: status,
+        rpcTransportError: rpcErr?.message ?? null,
+        rpcRawType: rpcRaw === null ? 'null' : typeof rpcRaw,
+        rpcOk: rpcEnvelope?.ok ?? null,
+        rpcOkResolved,
+        rpcErrorCode: rpcEnvelope?.error ?? null,
+        rpcStatus: rpcEnvelope?.status ?? null,
+      },
+      timestamp: Date.now(),
+    }
+    stashTribunalDebug(dbgRpc as unknown as Record<string, unknown>)
+    void fetch('http://127.0.0.1:7417/ingest/1c6c16d3-97bb-4ef5-b18a-32d8ab1e4cbd', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'd8d7f0' },
+      body: JSON.stringify(dbgRpc),
+    }).catch(() => {})
+    // #endregion
+
+    if (rpcErr) setMessage(rpcErr.message)
+    else if (!rpcOkResolved) {
+      const code = rpcEnvelope?.error
+      const msg =
+        code === 'unauthorized'
+          ? 'Not authorised to judge this decree (sign in as the teacher who owns this game).'
+          : code === 'slot_not_found'
+            ? 'Decree scroll not found — refresh clerks.'
+            : code === 'invalid_status'
+              ? 'Invalid tribunal ruling.'
+              : code != null
+                ? `Tribunal could not seal (${code}). If you just deployed, run supabase-teacher-review.sql in the Supabase SQL editor.`
+                : 'Tribunal response was unexpected — refresh and try again.'
+      setMessage(msg)
+    } else {
+      setMessage(null)
+    }
     await load()
   }
 
@@ -124,6 +340,27 @@ export function TeacherTurnConsole({ gameId }: TeacherTurnConsoleProps) {
 
     const res = await advanceGameTurnTeacher(gameId)
     setAdvancing(false)
+
+    // #region agent log
+    const dbgAdv = {
+      sessionId: 'd8d7f0',
+      runId: 'post-fix-5',
+      hypothesisId: 'D',
+      location: 'TeacherTurnConsole.tsx:handleAdvance',
+      message: 'advanceGameTurnTeacher result',
+      data: {
+        ok: !('detail' in res),
+        detailOrMessage: 'detail' in res ? res.detail : res.message,
+      },
+      timestamp: Date.now(),
+    }
+    stashTribunalDebug(dbgAdv as unknown as Record<string, unknown>)
+    void fetch('http://127.0.0.1:7417/ingest/1c6c16d3-97bb-4ef5-b18a-32d8ab1e4cbd', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'd8d7f0' },
+      body: JSON.stringify(dbgAdv),
+    }).catch(() => {})
+    // #endregion
 
     if ('detail' in res) {
       setMessage(res.detail)
@@ -148,7 +385,11 @@ export function TeacherTurnConsole({ gameId }: TeacherTurnConsoleProps) {
         <div className="flex gap-2 flex-wrap items-center">
           <button
             type="button"
-            onClick={() => void load()}
+            onClick={() => {
+              setMessage(null)
+              setLoadBanner(null)
+              void load()
+            }}
             disabled={loading}
             className="rounded-lg border border-slate-500 px-3 py-1 text-xs uppercase tracking-wide hover:bg-slate-700 disabled:opacity-50"
           >
@@ -170,7 +411,11 @@ export function TeacherTurnConsole({ gameId }: TeacherTurnConsoleProps) {
         </div>
       </div>
 
-      {slots.length === 0 && (
+      {loadBanner && (
+        <p className="text-xs text-rose-200 border border-rose-900/80 bg-rose-950/35 rounded px-3 py-2">{loadBanner}</p>
+      )}
+
+      {slots.length === 0 && !loadBanner && (
         <p className="text-xs text-slate-500 italic">No student scrolls lodged for review — fleets yet idle.</p>
       )}
 
