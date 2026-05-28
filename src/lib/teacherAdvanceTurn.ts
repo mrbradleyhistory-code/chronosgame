@@ -2,8 +2,8 @@ import { supabase } from './supabase'
 import type { HexMapData } from './hexUtils'
 import { parseHexMapData } from './hexUtils'
 import type { Civilization } from '../contexts/StudentContext'
-import type { TurnActionSlotRow } from '../types/actions'
 import { coerceGameTurn } from './coerceTurn'
+import { fetchTeacherTurnSlotsForGameTurn } from './teacherTurnSlotsRpc'
 import { resolveTurnForGame } from './turnEngine'
 
 function rowToCivilization(row: Record<string, unknown>): Civilization {
@@ -50,26 +50,8 @@ export async function advanceGameTurnTeacher(
 
   const civilizations = (civRows as Record<string, unknown>[]).map(rowToCivilization)
 
-  const { data: queues, error: qErr } = await supabase
-    .from('turn_action_slots')
-    .select('*')
-    .eq('game_id', gameId)
-    .eq('turn_number', turnNow)
-
-  if (qErr) return { detail: qErr.message }
-
-  const queueRows = ((queues ?? []) as Record<string, unknown>[]).map((r) => ({
-    id: r.id as string,
-    game_id: r.game_id as string,
-    civ_id: r.civ_id as string,
-    turn_number: r.turn_number as number,
-    slot_index: r.slot_index as number,
-    action_type: r.action_type as TurnActionSlotRow['action_type'],
-    payload: (r.payload as Record<string, unknown>) ?? {},
-    review_status: r.review_status as TurnActionSlotRow['review_status'],
-    reviewed_payload: r.reviewed_payload as Record<string, unknown> | null,
-    submitted_at: r.submitted_at as string,
-  }))
+  const { error: slotFetchErr, rows: queueRows } = await fetchTeacherTurnSlotsForGameTurn(gameId, turnNow)
+  if (slotFetchErr) return { detail: slotFetchErr }
 
   const unresolved = queueRows.filter((row) => row.review_status === 'submitted')
   if (unresolved.length) {

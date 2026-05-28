@@ -18,6 +18,8 @@ interface TechTreePanelProps {
   selectedTechId?: string
   /** Select a mastery for scholarship slot */
   onSelectTech?: (techId: string) => void
+  /** Dark sidebar styling when nested in student action queue */
+  embedded?: boolean
 }
 
 function directiveLine(def: TechDefinition): string[] {
@@ -52,6 +54,7 @@ export function TechTreePanel({
   knowledge,
   selectedTechId,
   onSelectTech,
+  embedded = false,
 }: TechTreePanelProps): ReactElement {
   const researchedSet = useMemo(() => new Set(researchedIds), [researchedIds])
 
@@ -77,16 +80,18 @@ export function TechTreePanel({
   }, [researchedSet])
 
   return (
-    <div className="tech-tree-wrap">
-      <div className="tech-tree-caption">
-        <p className="tech-tree-caption-title">Syllabus of ingenuity</p>
-        <p className="tech-tree-caption-meta">
-          Century {calendarTurn} · stockpiled lore {knowledge} — bronze nodes brighten when doctrines may advance; grey
-          stone waits on prerequisites or the calendar&apos;s march.
+    <div className={embedded ? 'rounded-lg border border-slate-700 bg-slate-900/40 p-2' : 'tech-tree-wrap'}>
+      <div className={embedded ? 'px-1 pb-2' : 'tech-tree-caption'}>
+        <p className={embedded ? 'text-xs font-semibold text-slate-300' : 'tech-tree-caption-title'}>
+          Technology tree
+        </p>
+        <p className={embedded ? 'text-[11px] text-slate-500 mt-1 leading-relaxed' : 'tech-tree-caption-meta'}>
+          Century {calendarTurn} · {knowledge} knowledge stored. Gold nodes can be researched; grey nodes need prerequisites
+          or a later century.
         </p>
       </div>
 
-      <div className="tech-tree-svg-frame">
+      <div className={embedded ? 'rounded-md border border-slate-600 bg-slate-950/80 overflow-hidden' : 'tech-tree-svg-frame'}>
         <svg
           role="img"
           aria-label="Technology tree spanning Bronze, Iron, and Classical eras"

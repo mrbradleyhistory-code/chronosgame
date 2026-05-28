@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Uncial+Antiqua&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&display=swap');
 @import "tailwindcss";
 
 /* ============================================================
@@ -85,12 +85,15 @@
   text-shadow: 1px 2px 3px rgba(255, 240, 200, 0.4);
 }
 
-.scroll-subtitle {
-  font-family: 'Uncial Antiqua', cursive;
-  font-size: 0.85rem;
+/* Login tagline only — plain serif, not decorative display faces at small sizes */
+.parchment-page .scroll-subtitle {
+  font-family: 'Cinzel', Georgia, 'Times New Roman', serif;
+  font-size: 0.72rem;
+  font-weight: 600;
   color: #7a4e1e;
-  margin: 0.3rem 0 0;
-  letter-spacing: 0.04em;
+  margin: 0.35rem 0 0;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
 }
 
 .scroll-divider {
@@ -99,7 +102,7 @@
   align-items: center;
   gap: 0.6rem;
   color: #7a4e1e;
-  font-family: 'Uncial Antiqua', cursive;
+  font-family: 'Cinzel', Georgia, serif;
   font-size: 0.78rem;
   white-space: nowrap;
 }
@@ -503,6 +506,523 @@
 }
 
 /* ============================================================
+   TEACHER TRIBUNAL — magistrate chamber / sealed decrees
+   ============================================================ */
+
+.tribunal-panel {
+  background:
+    radial-gradient(ellipse at 12% 0%, rgba(120, 70, 20, 0.18) 0%, transparent 48%),
+    linear-gradient(175deg, #1a1209 0%, #120c07 52%, #0d0906 100%);
+  border: 2px solid #7a4e1e;
+  border-radius: 2px;
+  box-shadow:
+    0 0 0 1px rgba(200, 169, 110, 0.22),
+    0 0 0 4px rgba(122, 78, 30, 0.35),
+    0 10px 28px rgba(0, 0, 0, 0.55);
+  overflow: hidden;
+}
+
+.tribunal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.65rem 0.85rem;
+  background: linear-gradient(180deg, #5c3312 0%, #3d1f09 100%);
+  border-bottom: 2px solid #2a1508;
+}
+
+.tribunal-header-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.tribunal-eyebrow {
+  font-family: 'Cinzel', Georgia, serif;
+  font-size: 0.58rem;
+  font-weight: 600;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: rgba(244, 228, 193, 0.55);
+}
+
+.tribunal-title {
+  margin: 0.15rem 0 0;
+  font-family: 'Cinzel', Georgia, serif;
+  font-size: 0.95rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #f4e4c1;
+  line-height: 1.2;
+}
+
+.tribunal-subtitle {
+  margin: 0.35rem 0 0;
+  font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+  font-size: 0.72rem;
+  line-height: 1.45;
+  color: rgba(232, 213, 160, 0.82);
+}
+
+.tribunal-century-seal {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 2.65rem;
+  height: 2.65rem;
+  border-radius: 9999px;
+  background: radial-gradient(circle at 35% 30%, #f7ecce 0%, #e6cc90 55%, #c8a96e 100%);
+  border: 2px solid #8b5a2b;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 250, 230, 0.55),
+    0 2px 6px rgba(0, 0, 0, 0.45);
+}
+
+.tribunal-century-seal-num {
+  font-family: 'Cinzel', Georgia, serif;
+  font-size: 1rem;
+  font-weight: 700;
+  color: #3a2210;
+  line-height: 1;
+}
+
+.tribunal-century-seal-label {
+  font-family: 'Cinzel', Georgia, serif;
+  font-size: 0.38rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #5c3312;
+  margin-top: 0.1rem;
+}
+
+.tribunal-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  padding: 0.55rem 0.85rem;
+  border-bottom: 1px solid rgba(122, 78, 30, 0.35);
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.tribunal-btn {
+  font-family: 'Cinzel', Georgia, serif;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 0.45rem 0.65rem;
+  border-radius: 2px;
+  cursor: pointer;
+  transition: background 0.15s, box-shadow 0.15s, opacity 0.15s;
+}
+
+.tribunal-btn:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+.tribunal-btn-ghost {
+  font-family: 'Cinzel', Georgia, serif;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 0.45rem 0.65rem;
+  border-radius: 2px;
+  cursor: pointer;
+  transition: background 0.15s, box-shadow 0.15s, opacity 0.15s;
+  color: #e8d5a0;
+  background: transparent;
+  border: 1px solid rgba(200, 169, 110, 0.45);
+}
+
+.tribunal-btn-ghost:hover:not(:disabled) {
+  background: rgba(122, 78, 30, 0.25);
+}
+
+.tribunal-btn-march {
+  font-family: 'Cinzel', Georgia, serif;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 0.45rem 0.65rem;
+  border-radius: 2px;
+  cursor: pointer;
+  transition: background 0.15s, box-shadow 0.15s, opacity 0.15s;
+  color: #f4e4c1;
+  background: linear-gradient(180deg, #8b5a2b 0%, #5c3312 100%);
+  border: 1px solid #3d1f09;
+  box-shadow: 0 2px 5px rgba(15, 7, 2, 0.45), inset 0 1px 0 rgba(255, 235, 185, 0.12);
+}
+
+.tribunal-btn-march:hover:not(:disabled) {
+  background: linear-gradient(180deg, #9b6a3b 0%, #6b4020 100%);
+}
+
+.tribunal-body {
+  padding: 0.75rem 0.85rem 0.9rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.tribunal-notice {
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-size: 0.72rem;
+  line-height: 1.45;
+  padding: 0.55rem 0.65rem;
+  border-radius: 2px;
+  border: 1px solid;
+}
+
+.tribunal-notice--warn {
+  color: #fde8bf;
+  background: rgba(120, 60, 10, 0.35);
+  border-color: rgba(200, 130, 40, 0.45);
+}
+
+.tribunal-notice--ok {
+  color: #d8f0d0;
+  background: rgba(40, 80, 40, 0.28);
+  border-color: rgba(80, 140, 80, 0.4);
+}
+
+.tribunal-notice--muted {
+  color: rgba(232, 213, 160, 0.65);
+  background: rgba(0, 0, 0, 0.22);
+  border-color: rgba(122, 78, 30, 0.35);
+}
+
+.tribunal-notice--err {
+  color: #fecaca;
+  background: rgba(80, 20, 20, 0.35);
+  border-color: rgba(180, 60, 60, 0.45);
+}
+
+.tribunal-notice--info {
+  color: #bae6fd;
+  background: rgba(15, 40, 60, 0.35);
+  border-color: rgba(60, 120, 160, 0.4);
+}
+
+.tribunal-civ-block {
+  border: 1px solid rgba(200, 169, 110, 0.28);
+  border-radius: 2px;
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.22);
+}
+
+.tribunal-civ-head {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.45rem 0.65rem;
+  background: linear-gradient(90deg, rgba(122, 78, 30, 0.35) 0%, rgba(60, 35, 15, 0.15) 100%);
+  border-bottom: 1px solid rgba(200, 169, 110, 0.2);
+}
+
+.tribunal-civ-head::before {
+  content: '⚜';
+  font-size: 0.72rem;
+  color: rgba(232, 213, 160, 0.55);
+}
+
+.tribunal-civ-name {
+  font-family: 'Cinzel', Georgia, serif;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: #eabf70;
+}
+
+.tribunal-decree-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.tribunal-decree {
+  padding: 0.65rem 0.65rem 0.75rem;
+  border-top: 1px solid rgba(122, 78, 30, 0.22);
+  background:
+    linear-gradient(90deg, rgba(200, 120, 40, 0.12) 0%, transparent 0.65rem),
+    linear-gradient(172deg, rgba(247, 236, 206, 0.07) 0%, rgba(230, 204, 144, 0.03) 100%);
+}
+
+.tribunal-decree:first-child {
+  border-top: none;
+}
+
+.tribunal-decree-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.tribunal-decree-slot {
+  font-family: 'Cinzel', Georgia, serif;
+  font-size: 0.58rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(232, 213, 160, 0.55);
+}
+
+.tribunal-decree-type {
+  font-family: 'Cinzel', Georgia, serif;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #c8a96e;
+  padding: 0.12rem 0.4rem;
+  border: 1px solid rgba(200, 169, 110, 0.35);
+  border-radius: 2px;
+  background: rgba(0, 0, 0, 0.25);
+}
+
+.tribunal-status {
+  font-family: 'Cinzel', Georgia, serif;
+  font-size: 0.52rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 0.15rem 0.4rem;
+  border-radius: 2px;
+  border: 1px solid;
+}
+
+.tribunal-status--submitted {
+  color: #fde8bf;
+  background: rgba(180, 100, 20, 0.25);
+  border-color: rgba(240, 180, 60, 0.45);
+}
+
+.tribunal-status--approved {
+  color: #d8f0d0;
+  background: rgba(40, 100, 50, 0.3);
+  border-color: rgba(80, 160, 90, 0.4);
+}
+
+.tribunal-status--rejected {
+  color: #fecaca;
+  background: rgba(100, 30, 30, 0.35);
+  border-color: rgba(180, 70, 70, 0.45);
+}
+
+.tribunal-status--modified {
+  color: #bae6fd;
+  background: rgba(30, 70, 110, 0.35);
+  border-color: rgba(80, 140, 200, 0.4);
+}
+
+.tribunal-status--default {
+  color: #e8d5a0;
+  background: rgba(60, 45, 25, 0.4);
+  border-color: rgba(122, 78, 30, 0.45);
+}
+
+.tribunal-decree-summary {
+  margin: 0.45rem 0 0;
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  font-style: italic;
+  color: #e8d5a0;
+}
+
+.tribunal-verdict-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.55rem;
+}
+
+.tribunal-btn-grant {
+  font-family: 'Cinzel', Georgia, serif;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 0.45rem 0.65rem;
+  border-radius: 2px;
+  cursor: pointer;
+  transition: background 0.15s, opacity 0.15s;
+  color: #ecfdf5;
+  background: linear-gradient(180deg, rgba(30, 90, 55, 0.85) 0%, rgba(15, 55, 35, 0.95) 100%);
+  border: 1px solid rgba(80, 160, 100, 0.55);
+}
+
+.tribunal-btn-grant:hover:not(:disabled) {
+  background: linear-gradient(180deg, rgba(40, 110, 65, 0.9) 0%, rgba(20, 70, 45, 1) 100%);
+}
+
+.tribunal-btn-grant:disabled,
+.tribunal-btn-deny:disabled,
+.tribunal-btn-march:disabled,
+.tribunal-btn-ghost:disabled,
+.tribunal-btn-seal:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.tribunal-btn-deny {
+  font-family: 'Cinzel', Georgia, serif;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 0.45rem 0.65rem;
+  border-radius: 2px;
+  cursor: pointer;
+  transition: background 0.15s, opacity 0.15s;
+  color: #fee2e2;
+  background: linear-gradient(180deg, rgba(90, 30, 30, 0.85) 0%, rgba(55, 15, 15, 0.95) 100%);
+  border: 1px solid rgba(160, 70, 70, 0.55);
+}
+
+.tribunal-btn-deny:hover:not(:disabled) {
+  background: linear-gradient(180deg, rgba(110, 40, 40, 0.9) 0%, rgba(70, 20, 20, 1) 100%);
+}
+
+.tribunal-amend {
+  margin-top: 0.5rem;
+  border: 1px solid rgba(122, 78, 30, 0.35);
+  border-radius: 2px;
+  background: rgba(0, 0, 0, 0.28);
+}
+
+.tribunal-amend summary {
+  cursor: pointer;
+  padding: 0.4rem 0.55rem;
+  font-family: 'Cinzel', Georgia, serif;
+  font-size: 0.58rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(232, 213, 160, 0.55);
+  list-style: none;
+}
+
+.tribunal-amend summary::-webkit-details-marker {
+  display: none;
+}
+
+.tribunal-amend summary:hover {
+  color: rgba(244, 228, 193, 0.85);
+}
+
+.tribunal-amend-body {
+  padding: 0.45rem 0.55rem 0.55rem;
+  border-top: 1px solid rgba(122, 78, 30, 0.28);
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-size: 0.68rem;
+  line-height: 1.4;
+  color: rgba(232, 213, 160, 0.6);
+}
+
+.tribunal-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 0.35rem;
+  padding: 0.45rem 0.5rem;
+  border-radius: 2px;
+  border: 1px solid rgba(139, 90, 43, 0.55);
+  background: rgba(255, 250, 230, 0.06);
+  color: #e8d5a0;
+  font-family: ui-monospace, monospace;
+  font-size: 0.68rem;
+  line-height: 1.45;
+}
+
+.tribunal-textarea:focus {
+  outline: none;
+  border-color: rgba(200, 169, 110, 0.75);
+  box-shadow: 0 0 0 2px rgba(122, 78, 30, 0.35);
+}
+
+.tribunal-btn-seal {
+  font-family: 'Cinzel', Georgia, serif;
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 0.4rem 0.6rem;
+  border-radius: 2px;
+  cursor: pointer;
+  align-self: flex-end;
+  margin-top: 0.35rem;
+  color: #f4e4c1;
+  background: linear-gradient(180deg, #6b4420 0%, #4a2910 100%);
+  border: 1px solid #3d1f09;
+}
+
+.tribunal-btn-seal:hover:not(:disabled) {
+  background: linear-gradient(180deg, #7a5028 0%, #5c3312 100%);
+}
+
+.tribunal-audit {
+  border: 1px solid rgba(122, 78, 30, 0.35);
+  border-radius: 2px;
+  background: rgba(0, 0, 0, 0.22);
+}
+
+.tribunal-audit summary {
+  cursor: pointer;
+  padding: 0.45rem 0.65rem;
+  font-family: 'Cinzel', Georgia, serif;
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: rgba(232, 213, 160, 0.65);
+  list-style: none;
+}
+
+.tribunal-audit summary::-webkit-details-marker {
+  display: none;
+}
+
+.tribunal-audit-body {
+  padding: 0.55rem 0.65rem 0.65rem;
+  border-top: 1px solid rgba(122, 78, 30, 0.28);
+}
+
+.tribunal-audit-item {
+  padding: 0.45rem 0.5rem;
+  border: 1px solid rgba(122, 78, 30, 0.25);
+  border-radius: 2px;
+  background: rgba(0, 0, 0, 0.2);
+  margin-top: 0.35rem;
+}
+
+.tribunal-audit-item:first-child {
+  margin-top: 0;
+}
+
+.tribunal-divider {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.15rem 0;
+  color: rgba(200, 169, 110, 0.35);
+  font-size: 0.55rem;
+}
+
+.tribunal-divider::before,
+.tribunal-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(200, 169, 110, 0.35), transparent);
+}
+
+/* ============================================================
    PROJECTOR — battle inscription strip / dramatic cards
    ============================================================ */
 
@@ -541,7 +1061,7 @@
 }
 
 .projector-battle-eyebrow {
-  font-family: 'Uncial Antiqua', 'Cinzel', serif;
+  font-family: 'Cinzel', Georgia, serif;
   font-size: 0.74rem;
   letter-spacing: 0.06em;
   color: rgba(248, 220, 150, 0.65);
@@ -647,7 +1167,7 @@
 }
 
 .tech-tree-caption-title {
-  font-family: 'Uncial Antiqua', 'Cinzel', serif;
+  font-family: 'Cinzel', Georgia, serif;
   font-size: 0.9rem;
   color: #4a2910;
   letter-spacing: 0.06em;

@@ -14,8 +14,10 @@
 -- =============================================================================
 
 -- ── Chronos RPCs (drop before tables avoid odd dependency errors)
+drop function if exists public.submit_turn_queue(text, jsonb, text);
 drop function if exists public.submit_turn_queue(text, text, jsonb);
 drop function if exists public.get_student_play_state(text, text);
+drop function if exists public.teacher_list_turn_slots(uuid, integer);
 drop function if exists public.teacher_review_slot(uuid, text, jsonb);
 drop function if exists public.verify_student_pin(text, text);
 drop function if exists public.reset_civ_pin(uuid);

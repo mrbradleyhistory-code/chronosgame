@@ -237,6 +237,9 @@ create policy "Teacher reads answers"
 
 create extension if not exists pgcrypto;
 
+-- crypt()/gen_salt() live in pgcrypto — on Supabase they resolve via schema “extensions”.
+-- Always include schema "extensions" in search_path for functions that hash PINs.
+
 -- ------------------------------------------------------------
 -- verify_student_pin
 -- Called by unauthenticated students; bypasses RLS via SECURITY
@@ -264,7 +267,7 @@ returns table(
 )
 language plpgsql
 security definer
-set search_path = public
+set search_path = public, extensions
 as $$
 begin
   return query
@@ -291,7 +294,7 @@ create or replace function public.reset_civ_pin(p_civ_id uuid)
 returns text
 language plpgsql
 security definer
-set search_path = public
+set search_path = public, extensions
 as $$
 declare
   v_pin text;
@@ -330,7 +333,7 @@ create or replace function public.create_civ_with_pin(
 returns table(civ_id uuid, pin text)
 language plpgsql
 security definer
-set search_path = public
+set search_path = public, extensions
 as $$
 declare
   v_pin    text;

@@ -5,9 +5,9 @@ import { MapCanvas } from '../components/MapCanvas'
 import { TeacherTurnConsole } from '../components/TeacherTurnConsole'
 import { supabase } from '../lib/supabase'
 import { generateMap, randomSeed } from '../lib/mapGen'
-import { MAP_SIZE_OPTIONS } from '../lib/hexUtils'
+import { MAP_SIZE_OPTIONS, type HexMapData } from '../lib/hexUtils'
+import { applyCivSpawnsToGameMap } from '../lib/ensureGameMapSpawns'
 import { PRESET_MAPS, generatePreset } from '../lib/presetMaps'
-import type { HexMapData } from '../lib/hexUtils'
 
 export default function TeacherPage() {
   const { user, signInWithGoogle, signOut, loading } = useAuth()
@@ -57,12 +57,25 @@ export default function TeacherPage() {
   async function handleLock() {
     if (!previewMap || !activeGameId) return
     setSaving(true)
-    const { error } = await supabase
-      .from('games')
-      .update({ hex_map: previewMap, world_seed: currentSeed })
-      .eq('id', activeGameId)
+
+    const [{ data: civRows }, { error: updateErr }] = await Promise.all([
+      supabase.from('civilizations').select('id').eq('game_id', activeGameId),
+      supabase
+        .from('games')
+        .update({ hex_map: previewMap, world_seed: currentSeed })
+        .eq('id', activeGameId),
+    ])
+
+    if (updateErr) {
+      setSaving(false)
+      alert(updateErr.message)
+      return
+    }
+
+    const civIds = (civRows ?? []).map((c) => c.id)
+    await applyCivSpawnsToGameMap(activeGameId, previewMap, civIds, currentSeed || activeGameId, true)
+
     setSaving(false)
-    if (error) { alert(error.message); return }
     setIsLocked(true)
   }
 

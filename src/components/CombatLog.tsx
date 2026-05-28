@@ -4,21 +4,15 @@ import type { CombatLogEntry } from '../types/combat'
 import { combatLogEntriesFromTurnEvents } from '../lib/combatResolution'
 import { supabase } from '../lib/supabase'
 
-// ─── Props ─────────────────────────────────────────────────────────────────────
-
 interface CombatLogProps {
   gameId: string
   civId: string
 }
 
-// ─── Sort / filter ─────────────────────────────────────────────────────────────
-
 function battleSortDesc(a: CombatLogEntry, b: CombatLogEntry): number {
   if (b.resolved_turn !== a.resolved_turn) return b.resolved_turn - a.resolved_turn
   return b.slot_id.localeCompare(a.slot_id)
 }
-
-// ─── Component ─────────────────────────────────────────────────────────────────
 
 export function CombatLog({ gameId, civId }: CombatLogProps): ReactElement {
   const [mine, setMine] = useState<CombatLogEntry[]>([])
@@ -89,22 +83,22 @@ export function CombatLog({ gameId, civId }: CombatLogProps): ReactElement {
 
   const subtitle = useMemo(() => {
     const n = mine.length
-    if (n === 0) return 'No battles yet this chronicle.'
-    return `${n} battle${n === 1 ? '' : 's'} on record`
+    if (n === 0) return 'No battles recorded yet.'
+    return `${n} battle${n === 1 ? '' : 's'} involving your civilization`
   }, [mine.length])
 
   return (
-    <section className="combat-log-panel rounded border border-amber-900/40 bg-slate-900/90 overflow-hidden">
-      <header className="combat-log-panel-head px-3 py-2 border-b border-amber-900/35">
-        <h2 className="combat-log-title">Field chronicle</h2>
-        <p className="combat-log-sub">{subtitle}</p>
+    <section className="rounded-xl border border-slate-700 bg-slate-800/90 overflow-hidden">
+      <header className="px-3 py-2 border-b border-slate-700">
+        <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-400">Battle log</h2>
+        <p className="text-xs text-slate-500 mt-0.5">{subtitle}</p>
       </header>
-      <div className="combat-log-body max-h-64 overflow-y-auto px-2 py-3 space-y-2">
+      <div className="max-h-56 overflow-y-auto px-2 py-2 space-y-2">
         {loadErr && (
-          <p className="text-rose-300 text-xs px-1">Cannot read ledger: {loadErr}</p>
+          <p className="text-rose-300 text-xs px-1">Could not load battles: {loadErr}</p>
         )}
         {!loadErr && mine.length === 0 && (
-          <p className="text-slate-500 text-xs italic px-1">Awaiting inscribed conflicts…</p>
+          <p className="text-slate-500 text-xs px-1 py-2">Battles will appear here after the teacher advances the turn.</p>
         )}
         {mine.map((e) => {
           const iAttacked = e.attacker_civ_id === civId
@@ -116,20 +110,20 @@ export function CombatLog({ gameId, civId }: CombatLogProps): ReactElement {
           return (
             <article
               key={`${e.resolved_turn}-${e.slot_id}`}
-              className="combat-log-entry rounded-md border border-amber-950/50 bg-black/35 px-2.5 py-2 text-left"
+              className="rounded-lg border border-slate-700 bg-slate-900/60 px-2.5 py-2 text-left"
             >
               <div className="flex items-start justify-between gap-2 mb-1">
-                <span className="combat-log-chip text-[0.62rem]">
-                  Century {e.resolved_turn} · [{e.q},{e.r}]
+                <span className="text-[11px] text-slate-500">
+                  Century {e.resolved_turn} · hex ({e.q}, {e.r})
                 </span>
-                <span className={`combat-log-verdict shrink-0 ${victorious ? 'text-emerald-400' : 'text-amber-700'}`}>
+                <span className={`text-[11px] font-semibold shrink-0 ${victorious ? 'text-emerald-400' : 'text-rose-400'}`}>
                   {victorious ? 'Victory' : 'Defeat'}
                 </span>
               </div>
-              <p className="combat-log-narr text-[0.72rem] leading-snug opacity-95">{e.narrative}</p>
-              <p className="combat-log-metrics text-[0.62rem] mt-1.5 opacity-75">
-                Scores {e.attacker_total} vs {e.defender_total} · d20 {e.attacker_roll}/{e.defender_roll} · Casualties —
-                swords −{myLossMil}, souls −{myLossPop}
+              <p className="text-sm text-slate-200 leading-snug">{e.narrative}</p>
+              <p className="text-[11px] text-slate-500 mt-1.5 font-mono">
+                Scores {e.attacker_total} vs {e.defender_total} · d20 {e.attacker_roll}/{e.defender_roll} · Losses: −{myLossMil}{' '}
+                military, −{myLossPop} population
               </p>
             </article>
           )

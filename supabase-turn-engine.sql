@@ -22,7 +22,13 @@
 --   drop function if exists public.verify_student_pin(text, text);
 drop function if exists public.verify_student_pin(text, text);
 drop function if exists public.get_student_play_state(text, text);
+-- Drop both historical signatures: correct (text,text,jsonb) and wrong (text,jsonb,text) —
+-- the latter causes "could not choose the best candidate function" for submit_turn_queue.
+drop function if exists public.submit_turn_queue(text, jsonb, text);
 drop function if exists public.submit_turn_queue(text, text, jsonb);
+
+create extension if not exists pgcrypto;
+-- PIN RPCs below use crypt() from pgcrypto (usually in schema "extensions" on Supabase).
 
 -- Buildings placed via BUILD actions (persisted JSON array)
 alter table public.civilizations
@@ -59,14 +65,26 @@ alter table public.turn_action_slots enable row level security;
 
 drop policy if exists "Teacher manages turn action slots" on public.turn_action_slots;
 create policy "Teacher manages turn action slots"
-  on public.turn_action_slots for all
+  on public.turn_action_slots
+  as permissive
+  for all
   using (
     exists (
       select 1 from public.games g
-      where g.id = game_id and g.teacher_id = auth.uid()
+      where g.id = turn_action_slots.game_id and g.teacher_id = auth.uid()
+    )
+  )
+  with check (
+    exists (
+      select 1 from public.games g
+      where g.id = turn_action_slots.game_id and g.teacher_id = auth.uid()
     )
   );
 
+comment on policy "Teacher manages turn action slots" on public.turn_action_slots is
+  'Teachers only see decree rows for games they own. The teacher dashboard filters games '
+  'by teacher_id; without that, stray active games from other instructors would show in the picker '
+  'but this policy would hide all slots.';
 -- ------------------------------------------------------------
 -- Read policies for playable student clients (PIN auth in RPC)
 -- ------------------------------------------------------------
@@ -104,7 +122,7 @@ returns table(
 )
 language plpgsql
 security definer
-set search_path = public
+set search_path = public, extensions
 as $$
 begin
   return query
@@ -132,7 +150,7 @@ create or replace function public.get_student_play_state(
 returns jsonb
 language plpgsql
 security definer
-set search_path = public
+set search_path = public, extensions
 as $$
 declare
   row record;
@@ -148,6 +166,8 @@ begin
   if row is null then
     return null;
   end if;
+
+  perform public.ensure_hex_map_spawns_in_place(row.game_id);
 
   return jsonb_build_object(
     'civ', jsonb_build_object(
@@ -213,7 +233,7 @@ create or replace function public.submit_turn_queue(
 returns jsonb
 language plpgsql
 security definer
-set search_path = public
+set search_path = public, extensions
 as $$
 declare
   v_civ record;
@@ -292,6 +312,50 @@ alter table public.turn_action_slots add constraint turn_action_slots_action_typ
   ));
 
 -- ------------------------------------------------------------
+-- teacher_list_turn_slots — tribunal board loader (SECURITY DEFINER)
+-- PostgREST direct SELECT can return zero rows when RLS and JWT roles diverge.
+-- Mirrors ownership on games then reads slot rows inside DEFINER.
+-- ------------------------------------------------------------
+drop function if exists public.teacher_list_turn_slots(uuid, integer);
+
+create or replace function public.teacher_list_turn_slots(
+  p_game_id uuid,
+  p_turn    integer
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_tid uuid := auth.uid();
+begin
+  if v_tid is null then
+    return '[]'::jsonb;
+  end if;
+
+  if not exists (
+    select 1 from public.games g
+    where g.id = p_game_id and g.teacher_id = v_tid
+  ) then
+    return '[]'::jsonb;
+  end if;
+
+  return coalesce(
+    (
+      select jsonb_agg(to_jsonb(s) order by s.civ_id asc, s.slot_index asc)
+      from public.turn_action_slots s
+      where s.game_id = p_game_id
+        and s.turn_number = p_turn
+    ),
+    '[]'::jsonb
+  );
+end;
+$$;
+
+grant execute on function public.teacher_list_turn_slots(uuid, integer) to authenticated;
+
+-- ------------------------------------------------------------
 -- Teacher tribunal: security-definer review RPC
 -- Bypasses turn_action_slots RLS so rulings persist reliably when
 -- the teacher JWT is valid (REST updates can silently affect 0 rows).
@@ -311,7 +375,10 @@ set search_path = public, extensions
 as $$
 declare
   v_game_id uuid;
+  v_n       int;
 begin
+  perform set_config('row_security', 'off', true);
+
   select game_id into v_game_id
   from public.turn_action_slots
   where id = p_slot_id;
@@ -341,6 +408,11 @@ begin
                        end
   where id = p_slot_id;
 
+  get diagnostics v_n = row_count;
+  if v_n = 0 then
+    return jsonb_build_object('ok', false, 'error', 'update_failed');
+  end if;
+
   return jsonb_build_object(
     'ok',      true,
     'slot_id', p_slot_id,
@@ -350,3 +422,232 @@ end;
 $$;
 
 grant execute on function public.teacher_review_slot(uuid, text, jsonb) to authenticated;
+
+-- ------------------------------------------------------------
+-- save_hex_map_spawns — persist initial civ placement on hex_map
+-- Teachers update directly via RLS; students (anon/PIN) may call
+-- once when the stored map has zero owned cells.
+-- ------------------------------------------------------------
+drop function if exists public.hex_map_owner_count(jsonb);
+drop function if exists public.save_hex_map_spawns(uuid, jsonb);
+
+create or replace function public.hex_map_owner_count(p_map jsonb)
+returns integer
+language sql
+immutable
+as $$
+  select coalesce(sum(
+    case
+      when cell ? 'owner'
+       and cell->>'owner' is not null
+       and cell->>'owner' <> ''
+       and lower(cell->>'owner') <> 'null'
+      then 1 else 0
+    end
+  ), 0)::integer
+  from jsonb_array_elements(
+    case
+      when p_map is null then '[]'::jsonb
+      when p_map ? 'cells' then p_map->'cells'
+      when jsonb_typeof(p_map) = 'array' then p_map
+      else '[]'::jsonb
+    end
+  ) as cell;
+$$;
+
+create or replace function public.save_hex_map_spawns(
+  p_game_id uuid,
+  p_hex_map jsonb
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_teacher   uuid;
+  v_status    text;
+  v_old       jsonb;
+  v_old_count int;
+  v_new_count int;
+begin
+  select teacher_id, status, hex_map
+    into v_teacher, v_status, v_old
+  from public.games
+  where id = p_game_id;
+
+  if not found then
+    return jsonb_build_object('ok', false, 'error', 'game_not_found');
+  end if;
+
+  if v_status not in ('lobby', 'active', 'paused', 'review') then
+    return jsonb_build_object('ok', false, 'error', 'game_not_spawnable');
+  end if;
+
+  v_old_count := public.hex_map_owner_count(v_old);
+  v_new_count := public.hex_map_owner_count(p_hex_map);
+
+  if auth.uid() is distinct from v_teacher then
+    if v_old_count > 0 or v_new_count = 0 then
+      return jsonb_build_object('ok', false, 'error', 'forbidden');
+    end if;
+  end if;
+
+  update public.games
+  set hex_map = p_hex_map
+  where id = p_game_id;
+
+  return jsonb_build_object('ok', true, 'owners', v_new_count);
+end;
+$$;
+
+grant execute on function public.hex_map_owner_count(jsonb) to authenticated, anon;
+grant execute on function public.save_hex_map_spawns(uuid, jsonb) to authenticated, anon;
+
+-- ------------------------------------------------------------
+-- list_game_civ_roster — id/name/color for map rendering (no PIN)
+-- Students cannot SELECT civilizations directly (teacher-only RLS).
+-- ------------------------------------------------------------
+drop function if exists public.list_game_civ_roster(uuid);
+
+create or replace function public.list_game_civ_roster(p_game_id uuid)
+returns jsonb
+language sql
+security definer
+stable
+set search_path = public
+as $$
+  select coalesce(
+    jsonb_agg(
+      jsonb_build_object(
+        'id', c.id,
+        'group_name', c.group_name,
+        'color', c.color
+      )
+      order by c.group_name asc
+    ),
+    '[]'::jsonb
+  )
+  from public.civilizations c
+  join public.games g on g.id = c.game_id
+  where c.game_id = p_game_id
+    and g.status in ('active', 'paused', 'review', 'ended', 'lobby');
+$$;
+
+grant execute on function public.list_game_civ_roster(uuid) to authenticated, anon;
+
+-- ------------------------------------------------------------
+-- ensure_hex_map_spawns_in_place — server-side capital + fog bootstrap
+-- Runs on student login (get_student_play_state) and via client RPC.
+-- ------------------------------------------------------------
+drop function if exists public.ensure_hex_map_spawns_in_place(uuid);
+
+create or replace function public.ensure_hex_map_spawns_in_place(p_game_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_map     jsonb;
+  v_cells   jsonb;
+  v_len     int;
+  v_i       int;
+  v_cell    jsonb;
+  v_civ     uuid;
+  v_terrain text;
+  v_owner   text;
+  v_resource text;
+  v_expl    jsonb;
+  v_has_cap boolean;
+  v_placed  boolean;
+begin
+  select hex_map into v_map from public.games where id = p_game_id;
+  if v_map is null or not (v_map ? 'cells') then
+    return;
+  end if;
+
+  v_cells := v_map->'cells';
+  v_len := jsonb_array_length(v_cells);
+
+  for v_civ in select id from public.civilizations where game_id = p_game_id loop
+    select exists (
+      select 1
+      from jsonb_array_elements(v_cells) c
+      where c->>'owner' = v_civ::text
+    ) into v_has_cap;
+
+    if v_has_cap then
+      continue;
+    end if;
+
+    v_placed := false;
+
+    -- Prefer land hexes with at least one resource
+    for v_i in 0 .. v_len - 1 loop
+      v_cell := v_cells->v_i;
+      v_owner := v_cell->>'owner';
+      v_terrain := coalesce(v_cell->>'terrain', 'plains');
+      v_resource := v_cell->>'resource';
+
+      if v_owner is not null and v_owner <> '' and lower(v_owner) <> 'null' then
+        continue;
+      end if;
+
+      if v_terrain in ('lake', 'mountain', 'river') then
+        continue;
+      end if;
+
+      if v_resource is null or v_resource = '' or lower(v_resource) = 'null' then
+        continue;
+      end if;
+
+      v_cells := jsonb_set(v_cells, array[v_i::text, 'owner'], to_jsonb(v_civ::text), true);
+
+      v_expl := coalesce(v_cell->'explored_by', '[]'::jsonb);
+      if not v_expl @> jsonb_build_array(v_civ::text) then
+        v_expl := v_expl || jsonb_build_array(v_civ::text);
+      end if;
+      v_cells := jsonb_set(v_cells, array[v_i::text, 'explored_by'], v_expl, true);
+
+      v_placed := true;
+      exit;
+    end loop;
+
+    if v_placed then
+      continue;
+    end if;
+
+    -- Fallback: any passable land hex
+    for v_i in 0 .. v_len - 1 loop
+      v_cell := v_cells->v_i;
+      v_owner := v_cell->>'owner';
+      v_terrain := coalesce(v_cell->>'terrain', 'plains');
+
+      if v_owner is not null and v_owner <> '' and lower(v_owner) <> 'null' then
+        continue;
+      end if;
+
+      if v_terrain in ('lake', 'mountain', 'river') then
+        continue;
+      end if;
+
+      v_cells := jsonb_set(v_cells, array[v_i::text, 'owner'], to_jsonb(v_civ::text), true);
+
+      v_expl := coalesce(v_cell->'explored_by', '[]'::jsonb);
+      if not v_expl @> jsonb_build_array(v_civ::text) then
+        v_expl := v_expl || jsonb_build_array(v_civ::text);
+      end if;
+      v_cells := jsonb_set(v_cells, array[v_i::text, 'explored_by'], v_expl, true);
+
+      exit;
+    end loop;
+  end loop;
+
+  update public.games
+  set hex_map = jsonb_set(v_map, '{cells}', v_cells, true)
+  where id = p_game_id;
+end;
+$$;
+
+grant execute on function public.ensure_hex_map_spawns_in_place(uuid) to authenticated, anon;

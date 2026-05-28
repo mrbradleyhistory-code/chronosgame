@@ -1,11 +1,14 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { supabase } from '../lib/supabase'
 import { generateMap } from '../lib/mapGen'
+import { applyCivSpawnsToGameMap } from '../lib/ensureGameMapSpawns'
+import { findCivCapital } from '../lib/civPlacement'
+import { fetchGameCivRoster } from '../lib/gameCivRoster'
 import {
   HEX_SIZE,
   hexToPixel, pixelToHex, hexPath, mapPixelSize, parseHexMapData,
   TERRAIN_COLORS, TERRAIN_LABELS, RESOURCE_COLORS, RESOURCE_LABELS, RESOURCE_NAMES,
-  MAP_COLS, MAP_ROWS,
+  MAP_COLS, MAP_ROWS, countExploredForCiv,
 } from '../lib/hexUtils'
 import type { HexCell, HexMapData, TerrainType, ResourceType } from '../lib/hexUtils'
 
@@ -26,12 +29,18 @@ export interface MapCanvasProps {
   viewMode: 'teacher' | 'projector' | 'student'
   gameId: string
   civId?: string
+  /** Fallback when roster RPC/direct select is empty (student PIN session). */
+  playerCiv?: { id: string; color: string; group_name: string }
   // Teacher regen: if provided, the map is loaded from this data instead of DB
   previewMap?: HexMapData | null
   // Called after map is fetched/generated so teacher can inspect it
   onMapLoaded?: (map: HexMapData) => void
   /** Invoked whenever a learner selects a explored hex tile (for decree targeting). */
   onStudentHexPick?: (cell: HexCell) => void
+  /** Fired after map load + spawn repair — use to sync map state in parent. */
+  onStudentMapReady?: (map: HexMapData, civId: string) => void
+  /** Hex keys (q,r) highlighted as valid EXPAND targets; fog tiles in this set remain clickable. */
+  expandTargetKeys?: Set<string>
 }
 
 // ─── terrain sprite renderers ─────────────────────────────────────────────────
@@ -212,7 +221,11 @@ function drawResourceBadge(
   ctx.restore()
 }
 
-// ─── full draw routine ────────────────────────────────────────────────────────
+function cellVisibleForStudent(cell: HexCell, civId: string | undefined): boolean {
+  if (!civId) return false
+  const seen = cell.explored_by
+  return Array.isArray(seen) && seen.includes(civId)
+}
 
 function drawMap(
   ctx: CanvasRenderingContext2D,
@@ -224,6 +237,7 @@ function drawMap(
   civId: string | undefined,
   selectedQ: number | null,
   selectedR: number | null,
+  expandTargetKeys: Set<string> | undefined,
 ) {
   const { cols, rows, cells } = mapData
   ctx.clearRect(0, 0, canvas.width, canvas.height)
@@ -234,15 +248,31 @@ function drawMap(
   ctx.translate(transform.x, transform.y)
   ctx.scale(transform.scale, transform.scale)
 
+  const showAllTerritory = viewMode === 'teacher' || viewMode === 'projector'
+  const ownerFillAlpha = showAllTerritory ? '88' : '50'
+  const ownerStrokeWidth = showAllTerritory ? 2.5 : 2
+
   for (const cell of cells) {
     const { x: cx, y: cy } = hexToPixel(cell.q, cell.r)
-    const visible = viewMode !== 'student' || cell.explored_by.includes(civId ?? '')
+    const visible = viewMode !== 'student' || cellVisibleForStudent(cell, civId)
+    const isExpandTarget = expandTargetKeys?.has(`${cell.q},${cell.r}`) ?? false
 
     if (!visible) {
       hexPath(ctx, cx, cy)
-      ctx.fillStyle = '#111827'; ctx.fill()
+      ctx.fillStyle = isExpandTarget ? '#1a3a2a' : '#111827'
+      ctx.fill()
       hexPath(ctx, cx, cy)
-      ctx.strokeStyle = '#1f2937'; ctx.lineWidth = 1; ctx.stroke()
+      ctx.strokeStyle = isExpandTarget ? '#34d399' : '#1f2937'
+      ctx.lineWidth = isExpandTarget ? 2 : 1
+      ctx.stroke()
+      if (isExpandTarget) {
+        hexPath(ctx, cx, cy)
+        ctx.strokeStyle = 'rgba(52,211,153,0.55)'
+        ctx.lineWidth = 1.5
+        ctx.setLineDash([4, 3])
+        ctx.stroke()
+        ctx.setLineDash([])
+      }
       continue
     }
 
@@ -255,10 +285,21 @@ function drawMap(
 
     if (cell.owner) {
       const civ = civs.find(c => c.id === cell.owner)
-      if (civ) {
-        hexPath(ctx, cx, cy); ctx.fillStyle = civ.color + '50'; ctx.fill()
-        hexPath(ctx, cx, cy); ctx.strokeStyle = civ.color; ctx.lineWidth = 2; ctx.stroke()
-      }
+      const ownerColor = civ?.color ?? '#94a3b8'
+      hexPath(ctx, cx, cy)
+      ctx.fillStyle = ownerColor + ownerFillAlpha
+      ctx.fill()
+      hexPath(ctx, cx, cy)
+      ctx.strokeStyle = ownerColor
+      ctx.lineWidth = ownerStrokeWidth
+      ctx.stroke()
+    }
+
+    if (isExpandTarget) {
+      hexPath(ctx, cx, cy)
+      ctx.strokeStyle = '#34d399'
+      ctx.lineWidth = 2.5
+      ctx.stroke()
     }
 
     if (!cell.owner) {
@@ -280,7 +321,17 @@ function drawMap(
 
 // ─── component ────────────────────────────────────────────────────────────────
 
-export function MapCanvas({ viewMode, gameId, civId, previewMap, onMapLoaded, onStudentHexPick }: MapCanvasProps) {
+export function MapCanvas({
+  viewMode,
+  gameId,
+  civId,
+  playerCiv,
+  previewMap,
+  onMapLoaded,
+  onStudentHexPick,
+  onStudentMapReady,
+  expandTargetKeys,
+}: MapCanvasProps) {
   const canvasRef    = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
 
@@ -290,7 +341,10 @@ export function MapCanvas({ viewMode, gameId, civId, previewMap, onMapLoaded, on
   const selectedRef  = useRef<{ q: number; r: number } | null>(null)
   const viewModeRef  = useRef(viewMode)
   const civIdRef     = useRef(civId)
+  const playerCivRef = useRef(playerCiv)
   const hexPickRef   = useRef(onStudentHexPick)
+  const mapReadyRef  = useRef(onStudentMapReady)
+  const expandKeysRef = useRef(expandTargetKeys)
   const rafRef       = useRef(0)
   const isDragging   = useRef(false)
   const dragStart    = useRef({ x: 0, y: 0, tx: 0, ty: 0 })
@@ -298,11 +352,16 @@ export function MapCanvas({ viewMode, gameId, civId, previewMap, onMapLoaded, on
 
   const [loading, setLoading] = useState(true)
   const [error, setError]     = useState<string | null>(null)
+  const [mapHint, setMapHint] = useState<string | null>(null)
   const [tooltip, setTooltip] = useState<TooltipState | null>(null)
+  const [civLegend, setCivLegend] = useState<CivInfo[]>([])
 
   useEffect(() => { viewModeRef.current = viewMode }, [viewMode])
   useEffect(() => { civIdRef.current    = civId    }, [civId])
+  useEffect(() => { playerCivRef.current = playerCiv }, [playerCiv])
   useEffect(() => { hexPickRef.current = onStudentHexPick }, [onStudentHexPick])
+  useEffect(() => { mapReadyRef.current = onStudentMapReady }, [onStudentMapReady])
+  useEffect(() => { expandKeysRef.current = expandTargetKeys }, [expandTargetKeys])
 
   // ── render ──
   const redraw = useCallback(() => {
@@ -312,9 +371,12 @@ export function MapCanvas({ viewMode, gameId, civId, previewMap, onMapLoaded, on
       const ctx = canvas.getContext('2d'); if (!ctx) return
       const sel = selectedRef.current
       drawMap(ctx, canvas, mapRef.current, civsRef.current, transformRef.current,
-        viewModeRef.current, civIdRef.current, sel?.q ?? null, sel?.r ?? null)
+        viewModeRef.current, civIdRef.current, sel?.q ?? null, sel?.r ?? null,
+        expandKeysRef.current)
     })
   }, [])
+
+  useEffect(() => { redraw() }, [expandTargetKeys, redraw])
 
   // ── center map ──
   const centerMap = useCallback(() => {
@@ -325,6 +387,22 @@ export function MapCanvas({ viewMode, gameId, civId, previewMap, onMapLoaded, on
     transformRef.current = { x: (canvas.width - w * scale) / 2, y: (canvas.height - h * scale) / 2, scale }
     redraw()
   }, [redraw])
+
+  const centerOnHex = useCallback(
+    (q: number, r: number) => {
+      const canvas = canvasRef.current
+      if (!canvas) return
+      const { x: hx, y: hy } = hexToPixel(q, r)
+      const scale = Math.max(0.55, Math.min(transformRef.current.scale || 0.85, 1.25))
+      transformRef.current = {
+        scale,
+        x: canvas.width / 2 - hx * scale,
+        y: canvas.height / 2 - hy * scale,
+      }
+      redraw()
+    },
+    [redraw],
+  )
 
   // ── resize ──
   const syncSize = useCallback(() => {
@@ -379,10 +457,22 @@ export function MapCanvas({ viewMode, gameId, civId, previewMap, onMapLoaded, on
         stored = parseHexMapData(g.hex_map)
       }
 
-      const { data: civRows } = await supabase
-        .from('civilizations').select('id, color, group_name').eq('game_id', gameId)
+      const roster = await fetchGameCivRoster(gameId)
       if (cancelled) return
-      civsRef.current = (civRows ?? []) as CivInfo[]
+
+      let civList: CivInfo[] = roster
+      if (civList.length === 0 && playerCivRef.current) {
+        civList = [playerCivRef.current]
+      } else if (civIdRef.current && !civList.some((c) => c.id === civIdRef.current) && playerCivRef.current) {
+        civList = [...civList, playerCivRef.current]
+      }
+
+      civsRef.current = civList
+      setCivLegend(civList)
+      const civIds = civList.map((c) => c.id)
+      if (civIds.length === 0 && civIdRef.current) {
+        civIds.push(civIdRef.current)
+      }
 
       let hexMap = stored
       if (!hexMap) {
@@ -392,16 +482,69 @@ export function MapCanvas({ viewMode, gameId, civId, previewMap, onMapLoaded, on
         }
       }
 
+      hexMap = await applyCivSpawnsToGameMap(
+        gameId,
+        hexMap,
+        civIds,
+        worldSeed ?? gameId,
+        hexColExists,
+        civIdRef.current,
+      )
+
       if (cancelled) return
       mapRef.current = hexMap
       onMapLoaded?.(hexMap)
+
+      const focus = civIdRef.current
+      if (viewMode === 'student' && focus) {
+        const visible = countExploredForCiv(hexMap, focus)
+        if (visible === 0) {
+          setMapHint('Your starting territory is not on the map yet. Ask your teacher to start the game and lock a world map, then refresh.')
+        } else {
+          setMapHint(null)
+          mapReadyRef.current?.(hexMap, focus)
+        }
+      } else {
+        setMapHint(null)
+      }
+
       setLoading(false)
-      setTimeout(centerMap, 0)
+
+      if (viewMode === 'student' && civId) {
+        const cap = findCivCapital(hexMap, civId)
+        setTimeout(() => (cap ? centerOnHex(cap.q, cap.r) : centerMap()), 0)
+      } else {
+        setTimeout(centerMap, 0)
+      }
     }
 
     load()
     return () => { cancelled = true }
-  }, [gameId, viewMode, previewMap, centerMap, onMapLoaded])
+  }, [gameId, viewMode, previewMap, centerMap, centerOnHex, civId, onMapLoaded])
+
+  // Reload hex_map when the game row updates (turn advance, territory changes).
+  useEffect(() => {
+    if (!gameId || previewMap) return undefined
+
+    const channel = supabase
+      .channel(`map-sync-${gameId}-${viewMode}`)
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'games', filter: `id=eq.${gameId}` },
+        (payload) => {
+          const fresh = parseHexMapData((payload.new as { hex_map?: unknown }).hex_map)
+          if (!fresh) return
+          mapRef.current = fresh
+          onMapLoaded?.(fresh)
+          redraw()
+        },
+      )
+      .subscribe()
+
+    return () => {
+      void supabase.removeChannel(channel)
+    }
+  }, [gameId, previewMap, viewMode, onMapLoaded, redraw])
 
   // ── ResizeObserver ──
   useEffect(() => {
@@ -458,13 +601,15 @@ export function MapCanvas({ viewMode, gameId, civId, previewMap, onMapLoaded, on
       if (!cell) return
 
       selectedRef.current = { q, r }
-      const isVisible = viewModeRef.current !== 'student' || cell.explored_by.includes(civIdRef.current ?? '')
-      if (viewModeRef.current === 'student' && isVisible) {
+      const isVisible =
+        viewModeRef.current !== 'student' || cellVisibleForStudent(cell, civIdRef.current)
+      const expandPick = expandKeysRef.current?.has(`${q},${r}`) ?? false
+      if (viewModeRef.current === 'student' && (isVisible || expandPick)) {
         hexPickRef.current?.(cell)
       }
       const civ = civsRef.current.find(c => c.id === cell.owner)
       const container = containerRef.current
-      setTooltip(isVisible ? {
+      setTooltip(isVisible || expandPick ? {
         cell, civName: civ?.group_name ?? null,
         screenX: Math.min(sx + 12, (container?.clientWidth ?? 999) - 180),
         screenY: Math.min(sy + 12, (container?.clientHeight ?? 999) - 120),
@@ -496,6 +641,25 @@ export function MapCanvas({ viewMode, gameId, civId, previewMap, onMapLoaded, on
       {error && (
         <div className="absolute inset-0 flex items-center justify-center bg-slate-950/80">
           <p className="text-red-400 text-sm">{error}</p>
+        </div>
+      )}
+
+      {mapHint && !loading && viewMode === 'student' && (
+        <div className="absolute bottom-3 left-3 right-3 rounded-lg border border-amber-700/60 bg-amber-950/90 px-3 py-2 text-xs text-amber-100 pointer-events-none z-10">
+          {mapHint}
+        </div>
+      )}
+
+      {/* Territory legend (teacher / projector) */}
+      {!loading && (viewMode === 'teacher' || viewMode === 'projector') && civLegend.length > 0 && (
+        <div className="absolute bottom-2 left-2 rounded-lg border border-slate-700 bg-slate-900/90 p-2 text-xs space-y-1 pointer-events-none max-w-[14rem]">
+          <p className="text-slate-500 font-medium uppercase tracking-wide text-[10px]">Territory</p>
+          {civLegend.map((c) => (
+            <div key={c.id} className="flex items-center gap-1.5">
+              <span className="inline-block w-3 h-3 rounded-sm shrink-0 border border-white/20" style={{ backgroundColor: c.color }} />
+              <span className="text-slate-300 truncate">{c.group_name}</span>
+            </div>
+          ))}
         </div>
       )}
 

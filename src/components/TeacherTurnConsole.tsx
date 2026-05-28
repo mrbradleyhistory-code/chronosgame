@@ -3,6 +3,8 @@ import type { PostgrestError } from '@supabase/supabase-js'
 import { supabase } from '../lib/supabase'
 import { advanceGameTurnTeacher } from '../lib/teacherAdvanceTurn'
 import { coerceGameTurn } from '../lib/coerceTurn'
+import { fetchTeacherTurnSlotsForGameTurn } from '../lib/teacherTurnSlotsRpc'
+import { useAuth } from '../contexts/AuthContext'
 import type { TurnActionSlotRow } from '../types/actions'
 
 interface TeacherTurnConsoleProps {
@@ -20,17 +22,35 @@ interface QueueRow extends TurnActionSlotRow {
 
 type TeacherReviewRpcEnvelope = { ok?: boolean; error?: string; status?: string }
 
-function coerceTeacherReviewRpcResult(raw: unknown): TeacherReviewRpcEnvelope | null {
-  if (raw === null || raw === undefined) return null
-  if (typeof raw === 'string') {
+function unwrapRpcTopLevel(raw: unknown): unknown {
+  if (Array.isArray(raw)) {
+    if (raw.length === 1) return raw[0]
+    return raw
+  }
+  return raw
+}
+
+/** PostgREST / drivers sometimes wrap jsonb RPC results as strings or nested JSON. */
+function parseJsonGreedy(raw: unknown): unknown {
+  let v: unknown = unwrapRpcTopLevel(raw)
+  for (let i = 0; i < 6; i += 1) {
+    if (typeof v !== 'string') break
+    const s = v.trim()
+    if (!s.startsWith('{') && !s.startsWith('[')) break
     try {
-      return coerceTeacherReviewRpcResult(JSON.parse(raw) as unknown)
+      v = JSON.parse(s) as unknown
     } catch {
-      return null
+      break
     }
   }
-  if (typeof raw === 'object' && !Array.isArray(raw)) {
-    const o = raw as Record<string, unknown>
+  return v
+}
+
+function coerceTeacherReviewRpcResult(raw: unknown): TeacherReviewRpcEnvelope | null {
+  const parsed = parseJsonGreedy(raw)
+  if (parsed === null || parsed === undefined) return null
+  if (typeof parsed === 'object' && !Array.isArray(parsed)) {
+    const o = parsed as Record<string, unknown>
     const okRaw = o.ok
     const ok =
       okRaw === true || okRaw === 'true'
@@ -59,7 +79,85 @@ function flattenSupabaseError(err: PostgrestError): string {
   return [err.message, err.details, err.hint].filter((x) => typeof x === 'string' && x.trim().length > 0).join(' — ')
 }
 
+function policyDisplayName(id: string): string {
+  return id.charAt(0).toUpperCase() + id.slice(1)
+}
+
+function actionTypeLabel(type: string): string {
+  const labels: Record<string, string> = {
+    EXPAND: 'Expand',
+    EXPLORE: 'Explore',
+    ATTACK: 'Attack',
+    TRADE: 'Trade',
+    RESEARCH: 'Research',
+    BUILD: 'Build',
+    ENACT_POLICY: 'Policy',
+  }
+  return labels[type] ?? type.replace(/_/g, ' ')
+}
+
+function formatDecreeSummary(row: QueueRow, civNames: Record<string, string>): string {
+  const p = row.payload as Record<string, unknown>
+  switch (row.action_type) {
+    case 'TRADE': {
+      const cid = typeof p.toCivId === 'string' ? p.toCivId : null
+      const toName = cid ? (civNames[cid] ?? `Civ ${cid.slice(0, 8)}…`) : 'another court'
+      const bits: string[] = []
+      for (const key of ['food', 'timber', 'gold', 'stone'] as const) {
+        const n = p[key]
+        if (typeof n === 'number' && n !== 0) bits.push(`${n} ${key}`)
+      }
+      return bits.length > 0 ? `Send ${bits.join(', ')} to ${toName}.` : `Trade embassy to ${toName}.`
+    }
+    case 'EXPAND':
+    case 'EXPLORE':
+    case 'ATTACK':
+    case 'BUILD':
+      if (p.q != null && p.r != null) return `Target hex (${String(p.q)}, ${String(p.r)}) on the world map.`
+      return 'Coordinates inscribed on the imperial map.'
+    case 'RESEARCH':
+      return typeof p.techId === 'string' ? `Sponsor scholars toward ${p.techId}.` : 'Scholarly commission.'
+    case 'ENACT_POLICY':
+      return typeof p.policyId === 'string'
+        ? `Proclaim ${policyDisplayName(p.policyId)} as civic doctrine.`
+        : 'Doctrine of state.'
+    default:
+      return String(row.action_type)
+  }
+}
+
+function reviewStatusClass(status: QueueRow['review_status']): string {
+  switch (status) {
+    case 'submitted':
+      return 'tribunal-status tribunal-status--submitted'
+    case 'approved':
+      return 'tribunal-status tribunal-status--approved'
+    case 'rejected':
+      return 'tribunal-status tribunal-status--rejected'
+    case 'modified':
+      return 'tribunal-status tribunal-status--modified'
+    default:
+      return 'tribunal-status tribunal-status--default'
+  }
+}
+
+function reviewStatusLabel(status: QueueRow['review_status']): string {
+  switch (status) {
+    case 'submitted':
+      return 'Awaiting seal'
+    case 'approved':
+      return 'Granted'
+    case 'rejected':
+      return 'Denied'
+    case 'modified':
+      return 'Amended'
+    default:
+      return status
+  }
+}
+
 export function TeacherTurnConsole({ gameId }: TeacherTurnConsoleProps) {
+  const { user } = useAuth()
   const [slots, setSlots]                       = useState<QueueRow[]>([])
   const [turnNumber, setTurnNumber]             = useState<number | null>(null)
   const [loading, setLoading]                   = useState(false)
@@ -67,6 +165,7 @@ export function TeacherTurnConsole({ gameId }: TeacherTurnConsoleProps) {
   const [advancing, setAdvancing]               = useState(false)
   const [message, setMessage]                   = useState<string | null>(null)
   const [loadBanner, setLoadBanner]            = useState<string | null>(null)
+  const [civNames, setCivNames]                 = useState<Record<string, string>>({})
 
   const load = useCallback(async () => {
     if (!gameId) return
@@ -84,19 +183,21 @@ export function TeacherTurnConsole({ gameId }: TeacherTurnConsoleProps) {
     const t = coerceGameTurn(game.current_turn)
     setTurnNumber(t)
 
-    const [{ data: slotRows, error: slotErr }, { data: civRows, error: civErr }] = await Promise.all([
-      supabase.from('turn_action_slots').select('*').eq('game_id', gameId).eq('turn_number', t).order('civ_id'),
+    const [{ error: slotRpcErr, rows: rpcSlotRows }, { data: civRows, error: civErr }] = await Promise.all([
+      fetchTeacherTurnSlotsForGameTurn(gameId, t),
       supabase.from('civilizations').select('id, group_name').eq('game_id', gameId),
     ])
 
-    const slotQueryErrText = slotErr ? flattenSupabaseError(slotErr) : null
+    const slotQueryErrText = slotRpcErr
     const civQueryErrText = civErr ? flattenSupabaseError(civErr) : null
 
     setLoading(false)
 
-    if (slotErr) {
-      const line = flattenSupabaseError(slotErr)
-      setLoadBanner(`Could not load decree scrolls: ${line}`)
+    if (slotRpcErr) {
+      const line = slotRpcErr
+      setLoadBanner(
+        `Could not load decree scrolls: ${line}. If this mentions a missing function, run the latest supabase-turn-engine.sql in the Supabase SQL editor.`,
+      )
       setSlots([])
       // #region agent log
       {
@@ -105,7 +206,7 @@ export function TeacherTurnConsole({ gameId }: TeacherTurnConsoleProps) {
           runId: 'post-fix-5',
           hypothesisId: 'C',
           location: 'TeacherTurnConsole.tsx:load',
-          message: 'tribunal load slot query failed',
+          message: 'tribunal load slot RPC failed',
           data: {
             gameIdTail: gameId.slice(-8),
             currentTurn: t,
@@ -126,7 +227,7 @@ export function TeacherTurnConsole({ gameId }: TeacherTurnConsoleProps) {
       return
     }
 
-    const rawSlots = slotRows ?? []
+    const rawSlots = rpcSlotRows
     const gameStatus = typeof game.status === 'string' ? game.status : ''
     const playableForProbe = ['active', 'paused', 'review']
     let probeDistinctTurns: number[] | null = null
@@ -172,8 +273,7 @@ export function TeacherTurnConsole({ gameId }: TeacherTurnConsoleProps) {
     // #region agent log
     {
       const statuses = rawSlots.reduce<Record<string, number>>((acc, r) => {
-        const rs = typeof (r as { review_status?: string }).review_status === 'string' ? (r as { review_status: string }).review_status : '?'
-        acc[rs] = (acc[rs] ?? 0) + 1
+        acc[r.review_status] = (acc[r.review_status] ?? 0) + 1
         return acc
       }, {})
       const dbgLoad = {
@@ -193,7 +293,7 @@ export function TeacherTurnConsole({ gameId }: TeacherTurnConsoleProps) {
           gameErrFull: gameQueryErrText,
           slotErrFull: slotQueryErrText,
           civErrFull: civQueryErrText,
-          slotTurnNumsSample: rawSlots.slice(0, 5).map((r) => (r as { turn_number?: number }).turn_number),
+          slotTurnNumsSample: rawSlots.slice(0, 5).map((r) => r.turn_number),
           probeDistinctTurns,
           probeErrMsg,
         },
@@ -207,11 +307,6 @@ export function TeacherTurnConsole({ gameId }: TeacherTurnConsoleProps) {
       }).catch(() => {})
     }
     // #endregion
-    if (!slotRows) {
-      setSlots([])
-      setLoadBanner(nextLoadBanner)
-      return
-    }
 
     if (civErr && rawSlots.length > 0) {
       setLoadBanner(
@@ -221,14 +316,15 @@ export function TeacherTurnConsole({ gameId }: TeacherTurnConsoleProps) {
       setLoadBanner(nextLoadBanner)
     }
     const civMap = Object.fromEntries((civRows ?? []).map((c) => [c.id, c]))
+    setCivNames(Object.fromEntries((civRows ?? []).map((c) => [c.id, c.group_name])))
 
     setSlots(
-      (slotRows as TurnActionSlotRow[]).map((row) => ({
+      rawSlots.map((row) => ({
         ...row,
         civilization: civMap[row.civ_id] ?? null,
       })),
     )
-  }, [gameId])
+  }, [gameId, user?.id])
 
   useEffect(() => {
     void load()
@@ -258,29 +354,43 @@ export function TeacherTurnConsole({ gameId }: TeacherTurnConsoleProps) {
       void supabase.removeChannel(chan)
       void supabase.removeChannel(gameChan)
     }
-  }, [gameId, load])
+  }, [gameId, load, user?.id])
 
-  const grouped = useMemo(() => {
+  const groupByCiv = useCallback((list: QueueRow[]) => {
     const map = new Map<string, QueueRow[]>()
-    slots.forEach((row) => {
+    list.forEach((row) => {
       const bucket = map.get(row.civ_id)
       if (bucket) bucket.push(row)
       else map.set(row.civ_id, [row])
     })
     map.forEach((arr) => arr.sort((a, b) => a.slot_index - b.slot_index))
     return map
-  }, [slots])
+  }, [])
+
+  /** Teacher cares about submitted first; rulings hide from primary list so approve feels final. */
+  const awaitingSlots = useMemo(() => slots.filter((s) => s.review_status === 'submitted'), [slots])
+  const resolvedSlots = useMemo(
+    () => slots.filter((s) => s.review_status === 'approved' || s.review_status === 'rejected' || s.review_status === 'modified'),
+    [slots],
+  )
+  const draftOnly =
+    slots.length > 0 && awaitingSlots.length === 0 && resolvedSlots.length === 0
+  const groupedAwaiting = useMemo(() => groupByCiv(awaitingSlots), [awaitingSlots, groupByCiv])
+  const groupedResolved = useMemo(() => groupByCiv(resolvedSlots), [resolvedSlots, groupByCiv])
 
   async function setReview(rowId: string, status: QueueRow['review_status'], reviewedPayload?: Record<string, unknown>) {
     setBusyId(rowId)
     setMessage(null)
 
     // Security-definer RPC — avoids RLS silent 0-row updates on turn_action_slots (see supabase-teacher-review.sql).
-    const { data: rpcRaw, error: rpcErr } = await supabase.rpc('teacher_review_slot', {
-      p_slot_id: rowId,
-      p_status: status,
-      p_reviewed_payload: reviewedPayload ?? null,
-    })
+    const rpcArgs: {
+      p_slot_id: string
+      p_status: QueueRow['review_status']
+      p_reviewed_payload?: Record<string, unknown>
+    } = { p_slot_id: rowId, p_status: status }
+    if (reviewedPayload !== undefined) rpcArgs.p_reviewed_payload = reviewedPayload
+
+    const { data: rpcRaw, error: rpcErr } = await supabase.rpc('teacher_review_slot', rpcArgs)
 
     setBusyId(null)
 
@@ -317,16 +427,24 @@ export function TeacherTurnConsole({ gameId }: TeacherTurnConsoleProps) {
     if (rpcErr) setMessage(rpcErr.message)
     else if (!rpcOkResolved) {
       const code = rpcEnvelope?.error
-      const msg =
-        code === 'unauthorized'
-          ? 'Not authorised to judge this decree (sign in as the teacher who owns this game).'
-          : code === 'slot_not_found'
-            ? 'Decree scroll not found — refresh clerks.'
-            : code === 'invalid_status'
-              ? 'Invalid tribunal ruling.'
-              : code != null
-                ? `Tribunal could not seal (${code}). If you just deployed, run supabase-teacher-review.sql in the Supabase SQL editor.`
-                : 'Tribunal response was unexpected — refresh and try again.'
+      let msg: string
+      if (code === 'unauthorized') {
+        msg = 'You are not allowed to judge this decree. Sign in as the teacher who owns this game.'
+      } else if (code === 'slot_not_found') {
+        msg = 'That decree was not found. Click Refresh and try again.'
+      } else if (code === 'invalid_status') {
+        msg = 'Invalid ruling status.'
+      } else if (code === 'update_failed') {
+        msg =
+          'The database did not apply this ruling. In Supabase, re-run teacher_review_slot from supabase-turn-engine.sql, then refresh this page.'
+      } else if (code != null) {
+        msg = `Could not seal ruling (${code}). Deploy the latest supabase-turn-engine.sql if this persists.`
+      } else if (rpcRaw !== null && rpcRaw !== undefined && typeof rpcRaw === 'object') {
+        msg = `Unexpected tribunal response (${JSON.stringify(rpcRaw).slice(0, 200)}…). Check chronos_debug_tribunal in session storage.`
+      } else {
+        msg =
+          `Unexpected tribunal response (${String(typeof rpcRaw)}). Deploy teacher_review_slot or check your network.`
+      }
       setMessage(msg)
     } else {
       setMessage(null)
@@ -372,125 +490,203 @@ export function TeacherTurnConsole({ gameId }: TeacherTurnConsoleProps) {
   }
 
   const pendingJudgement = slots.some((s) => s.review_status === 'submitted')
+  const pendingCount = slots.filter((s) => s.review_status === 'submitted').length
 
   return (
-    <div className="rounded-xl border border-slate-600 bg-slate-800 p-4 space-y-4">
-      <div className="flex items-center justify-between gap-4 flex-wrap">
-        <div>
-          <h3 className="text-sm font-semibold text-white uppercase tracking-wide">Century tribunal</h3>
-          <p className="text-xs text-slate-400 mt-1">
-            Review each sealed decree ({turnNumber != null ? `planning Century ${turnNumber}` : 'fetching parchment…'})
+    <div className="tribunal-panel">
+      <header className="tribunal-header">
+        <div className="tribunal-header-main">
+          <p className="tribunal-eyebrow">Magistrate&apos;s bench</p>
+          <h3 className="tribunal-title">Century tribunal</h3>
+          <p className="tribunal-subtitle">
+            Judge each sealed decree for this planning century. When no scroll awaits your seal, march Chronos forward to
+            resolve the turn on the map.
           </p>
         </div>
-        <div className="flex gap-2 flex-wrap items-center">
-          <button
-            type="button"
-            onClick={() => {
-              setMessage(null)
-              setLoadBanner(null)
-              void load()
-            }}
-            disabled={loading}
-            className="rounded-lg border border-slate-500 px-3 py-1 text-xs uppercase tracking-wide hover:bg-slate-700 disabled:opacity-50"
-          >
-            {loading ? 'Reading…' : 'Refresh clerks'}
-          </button>
-          <button
-            type="button"
-            onClick={() => void handleAdvance()}
-            disabled={advancing || pendingJudgement}
-            className="rounded-lg bg-amber-600 px-4 py-1.5 text-xs font-semibold uppercase tracking-wide text-black hover:bg-amber-500 disabled:opacity-40"
-            title={
-              pendingJudgement
-                ? 'Resolve unsubmitted rulings'
-                : 'Runs TRADE→BUILD→RESEARCH→EXPLORE→EXPAND→ATTACK phases, retrains economies, wipes resolved scrolls.'
-            }
-          >
-            {advancing ? 'Advancing eras…' : 'Advance Chronos'}
-          </button>
-        </div>
+        {turnNumber != null && (
+          <div className="tribunal-century-seal" title={`Planning century ${turnNumber}`}>
+            <span className="tribunal-century-seal-num">{turnNumber}</span>
+            <span className="tribunal-century-seal-label">Century</span>
+          </div>
+        )}
+      </header>
+
+      <div className="tribunal-toolbar">
+        <button
+          type="button"
+          className="tribunal-btn-ghost"
+          onClick={() => {
+            setMessage(null)
+            setLoadBanner(null)
+            void load()
+          }}
+          disabled={loading}
+        >
+          {loading ? 'Reading…' : 'Refresh clerks'}
+        </button>
+        <button
+          type="button"
+          className="tribunal-btn-march"
+          onClick={() => void handleAdvance()}
+          disabled={advancing || pendingJudgement}
+          title={
+            pendingJudgement
+              ? 'Grant or deny every submitted decree first'
+              : 'Resolve the turn and advance the calendar'
+          }
+        >
+          {advancing ? 'Marching…' : 'March Chronos'}
+        </button>
       </div>
 
-      {loadBanner && (
-        <p className="text-xs text-rose-200 border border-rose-900/80 bg-rose-950/35 rounded px-3 py-2">{loadBanner}</p>
-      )}
+      <div className="tribunal-body">
+        {loadBanner && <p className="tribunal-notice tribunal-notice--err">{loadBanner}</p>}
 
-      {slots.length === 0 && !loadBanner && (
-        <p className="text-xs text-slate-500 italic">No student scrolls lodged for review — fleets yet idle.</p>
-      )}
+        {!loadBanner && slots.length === 0 && (
+          <p className="tribunal-notice tribunal-notice--muted">
+            No decrees filed for this century. Students seal their actions from the map sidebar; they appear here as sealed
+            scrolls.
+          </p>
+        )}
 
-      {pendingJudgement && (
-        <p className="text-xs text-amber-300 bg-amber-950/40 border border-amber-900/70 rounded px-3 py-2">
-          Crimson ribbon still tied — judge every decree before marching time forward ({slots.filter((s) => s.review_status === 'submitted').length} awaiting).
-        </p>
-      )}
-
-      {message && (
-        <p className="text-xs text-sky-300 border border-slate-700 bg-slate-900/70 rounded px-3 py-2">{message}</p>
-      )}
-
-      <div className="space-y-4">
-        {Array.from(grouped.entries()).map(([civId, rows]) => (
-          <div key={civId} className="rounded-xl border border-slate-700 p-4 space-y-3">
-            <p className="text-sm font-semibold text-white">
-              {rows[0]?.civilization?.group_name ?? civId.slice(0, 6)}
+        {!loadBanner &&
+          slots.length > 0 &&
+          awaitingSlots.length === 0 &&
+          resolvedSlots.length > 0 && (
+            <p className="tribunal-notice tribunal-notice--ok">
+              Every decree has been judged. Open the court ledger below to review, then march Chronos when ready.
             </p>
+          )}
 
+        {!loadBanner && draftOnly && (
+          <p className="tribunal-notice tribunal-notice--muted">
+            Scrolls exist for this century but none await tribunal — still draft or stale. Refresh after students submit, or
+            inspect turn_action_slots in Supabase.
+          </p>
+        )}
+
+        {pendingJudgement && (
+          <p className="tribunal-notice tribunal-notice--warn">
+            {pendingCount} decree{pendingCount === 1 ? '' : 's'} still await your seal — grant assent or deny each before
+            marching time forward.
+          </p>
+        )}
+
+        {message && (
+          <div className="tribunal-notice tribunal-notice--info space-y-1">
+            <p>{message}</p>
+            <p className="opacity-70 text-[0.65rem]">
+              Debug: session storage key <span className="font-mono">chronos_debug_tribunal</span>
+            </p>
+          </div>
+        )}
+
+        {awaitingSlots.length > 0 && (
+          <>
+            <div className="tribunal-divider" aria-hidden>
+              ✦
+            </div>
             <div className="space-y-3">
-              {rows.map((row) => (
-                <div key={row.id} className="rounded-lg bg-slate-900/70 border border-slate-700 p-3 space-y-2">
-                  <div className="flex justify-between gap-2 items-start flex-wrap">
-                    <p className="text-xs uppercase text-slate-300">
-                      Slot {row.slot_index + 1}: <span className="text-white font-semibold">{row.action_type}</span>
-                      <span className="ml-2 text-slate-500">{row.review_status}</span>
+              {Array.from(groupedAwaiting.entries()).map(([civId, rows]) => (
+                <div key={civId} className="tribunal-civ-block">
+                  <div className="tribunal-civ-head">
+                    <p className="tribunal-civ-name">
+                      {rows[0]?.civilization?.group_name ?? `Court ${civId.slice(0, 8)}`}
                     </p>
-                    <span className="text-[11px] text-slate-500 font-mono">
-                      {(row.payload as Record<string, unknown>)?.q != null &&
-                      (row.payload as Record<string, unknown>)?.r != null
-                        ? `(${String((row.payload as Record<string, unknown>).q)},${String((row.payload as Record<string, unknown>).r)})`
-                        : 'coords via map lore'}
-                    </span>
                   </div>
-                  <pre className="text-[11px] text-slate-400 whitespace-pre-wrap break-all">
-                    {JSON.stringify(row.payload ?? {}, null, 2)}
-                  </pre>
 
-                  <div className="flex gap-2 flex-wrap">
-                    <button
-                      type="button"
-                      disabled={busyId === row.id}
-                      onClick={() => void setReview(row.id, 'approved')}
-                      className="rounded bg-emerald-800/70 border border-emerald-600 px-2 py-1 text-[11px] hover:bg-emerald-700 disabled:opacity-40"
-                    >
-                      Approve
-                    </button>
-                    <button
-                      type="button"
-                      disabled={busyId === row.id}
-                      onClick={() => void setReview(row.id, 'rejected')}
-                      className="rounded bg-rose-900/70 border border-rose-800 px-2 py-1 text-[11px] hover:bg-rose-800 disabled:opacity-40"
-                    >
-                      Reject
-                    </button>
-                    <OverwriteEditor
-                      key={row.id}
-                      payload={JSON.stringify(row.review_status === 'modified' && row.reviewed_payload ? row.reviewed_payload : row.payload, null, 2)}
-                      saving={busyId === row.id}
-                      onSave={(text) => {
-                        try {
-                          const parsed = JSON.parse(text) as Record<string, unknown>
-                          void setReview(row.id, 'modified', parsed)
-                        } catch {
-                          alert('Malformed JSON parchment — revise carefully.')
-                        }
-                      }}
-                    />
-                  </div>
+                  <ul className="tribunal-decree-list">
+                    {rows.map((row) => (
+                      <li key={row.id} className="tribunal-decree">
+                        <div className="tribunal-decree-meta">
+                          <span className="tribunal-decree-slot">Decree {row.slot_index + 1}</span>
+                          <span className="tribunal-decree-type">{actionTypeLabel(row.action_type)}</span>
+                          <span className={reviewStatusClass(row.review_status)}>
+                            {reviewStatusLabel(row.review_status)}
+                          </span>
+                        </div>
+
+                        <p className="tribunal-decree-summary">{formatDecreeSummary(row, civNames)}</p>
+
+                        <div className="tribunal-verdict-row">
+                          <button
+                            type="button"
+                            className="tribunal-btn-grant"
+                            disabled={busyId === row.id || row.review_status !== 'submitted'}
+                            onClick={() => void setReview(row.id, 'approved')}
+                          >
+                            Grant assent
+                          </button>
+                          <button
+                            type="button"
+                            className="tribunal-btn-deny"
+                            disabled={busyId === row.id || row.review_status !== 'submitted'}
+                            onClick={() => void setReview(row.id, 'rejected')}
+                          >
+                            Deny
+                          </button>
+                        </div>
+
+                        <details className="tribunal-amend">
+                          <summary>Amend decree (JSON)</summary>
+                          <div className="tribunal-amend-body">
+                            Adjust coordinates or amounts, then seal the amendment. Use sparingly.
+                            <OverwriteEditor
+                              payload={JSON.stringify(
+                                row.review_status === 'modified' && row.reviewed_payload
+                                  ? row.reviewed_payload
+                                  : row.payload,
+                                null,
+                                2,
+                              )}
+                              saving={busyId === row.id}
+                              onSave={(text) => {
+                                try {
+                                  const parsed = JSON.parse(text) as Record<string, unknown>
+                                  void setReview(row.id, 'modified', parsed)
+                                } catch {
+                                  alert('Invalid JSON — check commas and quotes.')
+                                }
+                              }}
+                            />
+                          </div>
+                        </details>
+                      </li>
+                    ))}
+                  </ul>
                 </div>
               ))}
             </div>
-          </div>
-        ))}
+          </>
+        )}
+
+        {resolvedSlots.length > 0 && (
+          <details className="tribunal-audit">
+            <summary>Court ledger — {resolvedSlots.length} ruled this century</summary>
+            <div className="tribunal-audit-body space-y-4">
+              {Array.from(groupedResolved.entries()).map(([civId, rows]) => (
+                <div key={`r-${civId}`}>
+                  <p className="tribunal-civ-name text-[0.68rem] mb-1.5">
+                    {rows[0]?.civilization?.group_name ?? civId.slice(0, 8)}
+                  </p>
+                  {rows.map((row) => (
+                    <div key={row.id} className="tribunal-audit-item">
+                      <div className="flex flex-wrap items-center gap-2 justify-between">
+                        <span className="tribunal-decree-slot">
+                          Decree {row.slot_index + 1} · {actionTypeLabel(row.action_type)}
+                        </span>
+                        <span className={reviewStatusClass(row.review_status)}>
+                          {reviewStatusLabel(row.review_status)}
+                        </span>
+                      </div>
+                      <p className="tribunal-decree-summary text-[0.75rem] mt-1">{formatDecreeSummary(row, civNames)}</p>
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
+          </details>
+        )}
       </div>
     </div>
   )
@@ -500,21 +696,17 @@ function OverwriteEditor({ payload, onSave, saving }: { payload: string; saving:
   const [text, setText] = useState(payload)
   useEffect(() => setText(payload), [payload])
   return (
-    <div className="flex-1 flex flex-col gap-1 min-w-[200px]">
+    <div className="flex flex-col">
       <textarea
         value={text}
         disabled={saving}
-        rows={5}
+        rows={6}
+        spellCheck={false}
         onChange={(e) => setText(e.target.value)}
-        className="w-full rounded-md border border-slate-600 bg-slate-950/80 px-2 py-1 text-[11px] text-slate-200 font-mono"
+        className="tribunal-textarea"
       />
-      <button
-        type="button"
-        disabled={saving}
-        onClick={() => onSave(text)}
-        className="self-end rounded bg-amber-500/20 border border-amber-700 px-3 py-1 text-[11px] text-amber-200 hover:bg-amber-500/35 disabled:opacity-40"
-      >
-        Seal modification
+      <button type="button" disabled={saving} onClick={() => onSave(text)} className="tribunal-btn-seal">
+        Seal amendment
       </button>
     </div>
   )

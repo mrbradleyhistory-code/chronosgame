@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
+import { parseHexMapData } from '../lib/hexUtils'
+import { applyCivSpawnsToGameMap } from '../lib/ensureGameMapSpawns'
 
 interface Game {
   id: string
@@ -57,19 +59,25 @@ export function CivManager({ onGameSelect }: CivManagerProps = {}) {
   }, [selectedGameId])
 
   async function loadGames() {
+    if (!user?.id) return
     const { data } = await supabase
       .from('games')
       .select('id, name, class_name, status')
+      .eq('teacher_id', user.id)
       .order('created_at', { ascending: false })
     if (data) {
       setGames(data)
       if (data.length > 0) {
         const first = data[0].id
         setSelectedGameId((prev) => {
-          const id = prev || first
+          const stillHere = !!(prev && data.some((g) => g.id === prev))
+          const id = stillHere ? prev : first
           onGameSelect?.(id)
           return id
         })
+      } else {
+        setSelectedGameId('')
+        onGameSelect?.('')
       }
     }
   }
@@ -114,8 +122,32 @@ export function CivManager({ onGameSelect }: CivManagerProps = {}) {
       .from('games')
       .update({ status })
       .eq('id', selectedGameId)
+    if (error) {
+      setSettingStatus(false)
+      alert(error.message)
+      return
+    }
+
+    if (status === 'active') {
+      const { data: game } = await supabase
+        .from('games')
+        .select('hex_map, world_seed')
+        .eq('id', selectedGameId)
+        .single()
+      const map = parseHexMapData(game?.hex_map)
+      if (map) {
+        const { data: civRows } = await supabase.from('civilizations').select('id').eq('game_id', selectedGameId)
+        await applyCivSpawnsToGameMap(
+          selectedGameId,
+          map,
+          (civRows ?? []).map((c) => c.id),
+          (game as { world_seed?: string | null })?.world_seed ?? selectedGameId,
+          true,
+        )
+      }
+    }
+
     setSettingStatus(false)
-    if (error) { alert(error.message); return }
     setGames((prev) =>
       prev.map((g) => (g.id === selectedGameId ? { ...g, status } : g))
     )
@@ -137,7 +169,24 @@ export function CivManager({ onGameSelect }: CivManagerProps = {}) {
     setNewGroupName('')
     setNewUsername('')
     setNewColor('#6366f1')
-    loadCivs(selectedGameId)
+    await loadCivs(selectedGameId)
+
+    const { data: game } = await supabase
+      .from('games')
+      .select('hex_map, world_seed')
+      .eq('id', selectedGameId)
+      .single()
+    const map = parseHexMapData(game?.hex_map)
+    if (map) {
+      const { data: allCivs } = await supabase.from('civilizations').select('id').eq('game_id', selectedGameId)
+      await applyCivSpawnsToGameMap(
+        selectedGameId,
+        map,
+        (allCivs ?? []).map((c) => c.id),
+        (game as { world_seed?: string | null })?.world_seed ?? selectedGameId,
+        true,
+      )
+    }
   }
 
   return (

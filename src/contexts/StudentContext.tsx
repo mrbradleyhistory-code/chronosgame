@@ -69,25 +69,34 @@ function persistCredToSession(pair: CredPair | null) {
   sessionStorage.setItem(PIN_SESSION_KEY, JSON.stringify(pair))
 }
 
+/** Only resume a session if both PIN pair and cached civ agree — avoids orphan LS after tab close */
+function initializeCivilization(): Civilization | null {
+  try {
+    const cred = restoreCredFromSession()
+    const stored = localStorage.getItem(STORAGE_KEY)
+    if (!cred || !stored) {
+      if (stored) localStorage.removeItem(STORAGE_KEY)
+      return null
+    }
+    return JSON.parse(stored) as Civilization
+  } catch {
+    localStorage.removeItem(STORAGE_KEY)
+    return null
+  }
+}
+
 export function StudentProvider({ children }: { children: ReactNode }) {
   const credRef = useRef<CredPair | null>(restoreCredFromSession())
 
-  const [civ, setCiv] = useState<Civilization | null>(() => {
-    try {
-      const stored = localStorage.getItem(STORAGE_KEY)
-      return stored ? (JSON.parse(stored) as Civilization) : null
-    } catch {
-      return null
-    }
-  })
+  const [civ, setCiv] = useState<Civilization | null>(() => initializeCivilization())
 
-  /** If PIN session missing but cached civ survives, purge stale atlas cache */
+  /** Mid-session PIN cleared elsewhere — drop cached civ */
   useEffect(() => {
     if (civ && !credRef.current) {
       setCiv(null)
       localStorage.removeItem(STORAGE_KEY)
     }
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [civ])
 
   useEffect(() => {
     if (civ) {

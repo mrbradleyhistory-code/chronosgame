@@ -142,15 +142,44 @@ export function mapPixelSize(cols = MAP_COLS, rows = MAP_ROWS, size = HEX_SIZE) 
 
 export function parseHexMapData(raw: unknown): HexMapData | null {
   if (!raw) return null
+
+  let parsed: HexMapData | null = null
   if (Array.isArray(raw)) {
-    // Legacy: flat array stored before HexMapData format
-    return { cols: MAP_COLS, rows: MAP_ROWS, cells: raw as HexCell[] }
+    parsed = { cols: MAP_COLS, rows: MAP_ROWS, cells: raw as HexCell[] }
+  } else {
+    const obj = raw as Record<string, unknown>
+    if (obj.cols && obj.rows && Array.isArray(obj.cells)) {
+      parsed = raw as HexMapData
+    }
   }
-  const obj = raw as Record<string, unknown>
-  if (obj.cols && obj.rows && Array.isArray(obj.cells)) {
-    return raw as HexMapData
+  if (!parsed) return null
+
+  return normalizeHexMap(parsed)
+}
+
+/** Ensure q/r indices and fog arrays are present on every cell. */
+export function normalizeHexMap(map: HexMapData): HexMapData {
+  const cols = map.cols
+  const rows = map.rows
+  return {
+    cols,
+    rows,
+    cells: map.cells.map((c, i) => {
+      const r = typeof c.r === 'number' ? c.r : Math.floor(i / cols)
+      const q = typeof c.q === 'number' ? c.q : i % cols
+      return {
+        ...c,
+        q,
+        r,
+        owner: c.owner ?? null,
+        explored_by: Array.isArray(c.explored_by) ? [...c.explored_by] : [],
+      }
+    }),
   }
-  return null
+}
+
+export function countExploredForCiv(map: HexMapData, civId: string): number {
+  return map.cells.filter((c) => Array.isArray(c.explored_by) && c.explored_by.includes(civId)).length
 }
 
 // ─── Offset odd‑r neighbours (parity deltas copied from procedural map generator) ─
